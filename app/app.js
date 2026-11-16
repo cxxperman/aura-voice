@@ -12,19 +12,21 @@ const PARAMS = [
   { id: 'width', name: 'Объём', hint: 'Ширина в стерео' },
   { id: 'space', name: 'Пространство', hint: 'Лёгкая комната вокруг голоса' },
   { id: 'deess', name: 'Мягкие «с» и «ш»', hint: 'Убирает резкие свистящие' },
+  { id: 'pitch', name: 'Тон голоса', hint: 'Ниже или выше, в полутонах', min: -12, max: 12, format: (v) => (v > 0 ? `+${v}` : String(v)) },
   // These two describe your room and your microphone technique, not a character, so presets leave them alone.
   { id: 'clean', name: 'Тишина в паузах', hint: 'Глушит фон, пока вы молчите', global: true },
   { id: 'ns', name: 'Шумоподавление', hint: 'Нейросеть: до 60 чистит фон, выше — глушит всё, кроме голоса', global: true },
   { id: 'pop', name: 'Анти-хлопок', hint: 'Смягчает удары «п» и «б» в микрофон', global: true },
+  { id: 'dereverb', name: 'Эхо комнаты', hint: 'Убирает гулкость помещения', global: true },
 ];
 
 const PRESETS = {
-  studio: { name: 'Студия', hue: 212, v: { warmth: 55, clarity: 50, air: 45, density: 55, width: 35, space: 12, clean: 45, deess: 50 } },
-  radio: { name: 'Радио', hue: 28, v: { warmth: 75, clarity: 65, air: 35, density: 85, width: 20, space: 5, clean: 55, deess: 60 } },
-  velvet: { name: 'Бархат', hue: 278, v: { warmth: 90, clarity: 30, air: 25, density: 60, width: 45, space: 20, clean: 45, deess: 70 } },
-  crystal: { name: 'Кристалл', hue: 176, v: { warmth: 30, clarity: 75, air: 80, density: 45, width: 50, space: 18, clean: 50, deess: 65 } },
-  cinema: { name: 'Кино', hue: 348, v: { warmth: 80, clarity: 45, air: 40, density: 70, width: 70, space: 40, clean: 40, deess: 55 } },
-  whisper: { name: 'Шёпот', hue: 140, v: { warmth: 45, clarity: 55, air: 90, density: 95, width: 60, space: 10, clean: 15, deess: 80 } },
+  studio: { name: 'Студия', hue: 212, v: { warmth: 55, clarity: 50, air: 45, density: 55, width: 35, space: 12, clean: 45, deess: 50, pitch: 0 } },
+  radio: { name: 'Радио', hue: 28, v: { warmth: 75, clarity: 65, air: 35, density: 85, width: 20, space: 5, clean: 55, deess: 60, pitch: 0 } },
+  velvet: { name: 'Бархат', hue: 278, v: { warmth: 90, clarity: 30, air: 25, density: 60, width: 45, space: 20, clean: 45, deess: 70, pitch: 0 } },
+  crystal: { name: 'Кристалл', hue: 176, v: { warmth: 30, clarity: 75, air: 80, density: 45, width: 50, space: 18, clean: 50, deess: 65, pitch: 0 } },
+  cinema: { name: 'Кино', hue: 348, v: { warmth: 80, clarity: 45, air: 40, density: 70, width: 70, space: 40, clean: 40, deess: 55, pitch: 0 } },
+  whisper: { name: 'Шёпот', hue: 140, v: { warmth: 45, clarity: 55, air: 90, density: 95, width: 60, space: 10, clean: 15, deess: 80, pitch: 0 } },
   custom: { name: 'Свой', hue: 44, v: null }, // whatever the user last dialled in by hand
 };
 
@@ -36,7 +38,7 @@ const DEFAULTS = {
   inGain: 0,
   outGain: 0,
   auto: true,
-  g: { ns: 0, pop: 50, clean: 45 },
+  g: { ns: 0, pop: 50, clean: 45, dereverb: 0 },
   custom: null,
   mute: false,
   monitor: false,
@@ -89,6 +91,7 @@ function pushSystem() {
       `clean=${state.g.clean}`, // after the preset values: the last one wins
       `ns=${state.g.ns}`,
       `pop=${state.g.pop}`,
+      `dereverb=${state.g.dereverb}`,
       `mute=${state.mute ? 1 : 0}`,
       `ingain=${state.inGain}`,
       `outgain=${state.outGain}`,
@@ -192,12 +195,17 @@ function setStatus(text, isError = false) {
   statusEl.textContent = text;
   statusEl.classList.toggle('error', isError);
 }
+// What the optional stages cost: each one has to look a little way ahead.
+function latencyText() {
+  const ms = (state.g.ns > 0 ? 10 : 0) + (state.g.dereverb > 0 ? 11 : 0) + (state.v.pitch ? 22 : 0);
+  return ms ? `задержка около ${ms} мс` : 'без задержки';
+}
 function liveStatus() {
   if (!engine.running) return setStatus('Нажмите на сферу, чтобы включить');
   if (engine.sampleMode) return setStatus('Играет проба — настраивайте звук');
   const c = engine.ctx;
   // +12 ms: look-ahead of the compressor and the limiter.
-  if (sys.installed) return setStatus(sys.alive ? `В эфире · встроено в микрофон, ${state.g.ns > 0 ? 'задержка 10 мс' : 'без задержки'}` : 'В эфире · жду ответа модуля…');
+  if (sys.installed) return setStatus(sys.alive ? `В эфире · встроено в микрофон, ${latencyText()}` : 'В эфире · жду ответа модуля…');
   const ms = Math.round((c.baseLatency + (c.outputLatency || 0)) * 1000 + 12);
   setStatus(`В эфире · задержка около ${ms} мс`);
 }
@@ -272,7 +280,7 @@ for (const [id, p] of Object.entries(PRESETS)) {
 function selectPreset(id) {
   if (!PRESETS[id]) return;
   state.preset = id;
-  state.v = { ...(id === 'custom' ? state.custom || state.v : PRESETS[id].v) };
+  state.v = { pitch: 0, ...(id === 'custom' ? state.custom || state.v : PRESETS[id].v) };
   renderPreset();
   renderSliders();
   applyAll();
@@ -286,6 +294,30 @@ function renderPreset() {
   document.documentElement.style.setProperty('--hue', p.hue);
 }
 
+/* ───────── Preset files ───────── */
+const flash = (text, isError = false) => {
+  setStatus(text, isError);
+  setTimeout(liveStatus, 4000);
+};
+$('#presetSave').addEventListener('click', async () => {
+  const saved = await window.auraSystem.exportPreset({ app: 'aura', version: 1, name: PRESETS[state.preset]?.name || 'Свой', v: state.v });
+  if (saved) flash('Пресет сохранён в файл');
+});
+$('#presetLoad').addEventListener('click', async () => {
+  const data = await window.auraSystem.importPreset();
+  if (!data) return;
+  if (data.error) return flash('Это не файл пресета Aura', true);
+  // Only the character travels in a file; room settings (noise, echo, gate) stay yours.
+  const v = {};
+  for (const p of PARAMS.filter((q) => !q.global)) {
+    const n = Number(data.v[p.id]);
+    v[p.id] = Number.isFinite(n) ? clamp(Math.round(n), p.min ?? 0, p.max ?? 100) : PRESETS.studio.v[p.id];
+  }
+  state.custom = v;
+  selectPreset('custom');
+  flash('Пресет загружен в «Свой»');
+});
+
 /* ───────── Sliders ───────── */
 const fill = (input) => {
   const p = ((input.value - input.min) / (input.max - input.min)) * 100;
@@ -294,15 +326,16 @@ const fill = (input) => {
 const slidersEl = $('#sliders');
 const sliderInputs = {};
 const bank = (p) => (p.global ? state.g : state.v);
+const show = (p, v) => (p.format ? p.format(Number(v)) : String(v));
 for (const p of PARAMS) {
   const label = document.createElement('label');
   label.className = 'slider';
-  label.innerHTML = `<span><b>${p.name}</b><em></em></span><input type="range" min="0" max="100" step="1"><small>${p.hint}</small>`;
+  label.innerHTML = `<span><b>${p.name}</b><em></em></span><input type="range" min="${p.min ?? 0}" max="${p.max ?? 100}" step="1"><small>${p.hint}</small>`;
   const input = label.querySelector('input');
   const value = label.querySelector('em');
   input.addEventListener('input', () => {
     bank(p)[p.id] = Number(input.value);
-    value.textContent = input.value;
+    value.textContent = show(p, input.value);
     fill(input);
     if (!p.global) {
       // Hand-tuning a character turns it into the user's own preset, so it is never lost.
@@ -315,7 +348,7 @@ for (const p of PARAMS) {
     }
     applyAll();
     save();
-    if (p.id === 'ns') liveStatus();
+    if (p.id === 'ns' || p.id === 'dereverb' || p.id === 'pitch') liveStatus();
   });
   // Without the module, noise suppression is the browser's own and belongs to the capture: reopen the microphone.
   if (p.id === 'ns') {
@@ -329,8 +362,8 @@ for (const p of PARAMS) {
 function renderSliders() {
   for (const p of PARAMS) {
     const { input, value } = sliderInputs[p.id];
-    input.value = bank(p)[p.id];
-    value.textContent = bank(p)[p.id];
+    input.value = bank(p)[p.id] ?? 0;
+    value.textContent = show(p, bank(p)[p.id] ?? 0);
     fill(input);
   }
 }
@@ -551,7 +584,7 @@ let energy = 0;
 let hue = PRESETS[state.preset]?.hue ?? 212;
 let rot = 0;
 
-const meterEls = { in: [$('#mIn'), $('#mInDb')], out: [$('#mOut'), $('#mOutDb')], gr: [$('#mGr'), $('#mGrDb')] };
+const meterEls = { in: [$('#mIn'), $('#mInDb')], out: [$('#mOut'), $('#mOutDb')], gr: [$('#mGr'), $('#mGrDb')], lufs: [$('#mLufs'), $('#mLufsDb')] };
 function setMeter([bar, text], frac, label) {
   bar.style.transform = `scaleX(${clamp(frac, 0, 1).toFixed(3)})`;
   text.textContent = label;
@@ -599,7 +632,10 @@ function frame(now) {
       setMeter(meterEls.in, (mod.in + 60) / 60, text ? dbLabel(mod.in) : meterEls.in[1].textContent);
       setMeter(meterEls.out, (mod.out + 60) / 60, text ? dbLabel(mod.out) : meterEls.out[1].textContent);
       setMeter(meterEls.gr, -mod.gr / 20, text ? `${mod.gr.toFixed(1)} дБ` : meterEls.gr[1].textContent);
+      // Loudness as listeners perceive it; the tick on the bar is -18 LUFS, the usual target for voice.
+      setMeter(meterEls.lufs, (mod.lufs + 40) / 30, text ? (mod.lufs < -60 ? '—' : `${Math.round(mod.lufs)} LUFS`) : meterEls.lufs[1].textContent);
     } else {
+      setMeter(meterEls.lufs, 0, '—');
       setMeter(meterEls.in, inFrac, text ? dbLabel(m.in) : meterEls.in[1].textContent);
       setMeter(meterEls.out, outFrac, text ? dbLabel(m.out) : meterEls.out[1].textContent);
       if (sys.installed && !engine.sampleMode) setMeter(meterEls.gr, 0, '—');

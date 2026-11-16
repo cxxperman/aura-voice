@@ -26,6 +26,7 @@
         <div class="meter"><span>Вход</span><div class="bar"><i id="mIn"></i></div><b id="mInDb">—</b></div>
         <div class="meter"><span>Выход</span><div class="bar"><i id="mOut"></i></div><b id="mOutDb">—</b></div>
         <div class="meter"><span>Сжатие</span><div class="bar gr"><i id="mGr"></i></div><b id="mGrDb">—</b></div>
+        <div class="meter"><span>Громкость</span><div class="bar lufs"><i id="mLufs"></i></div><b id="mLufsDb">—</b></div>
       </div>
 
       <div class="actions">
@@ -38,6 +39,8 @@
 
     <section class="controls">
       <div class="presets" id="presets" role="radiogroup" aria-label="Характер голоса"></div>
+
+      <div class="preset-files"><button type="button" id="presetSave">Сохранить в файл</button><button type="button" id="presetLoad">Загрузить из файла</button></div>
 
       <div class="card sliders" id="sliders"></div>
 

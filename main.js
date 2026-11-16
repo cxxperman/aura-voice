@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut } = require('electron');
+const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -26,7 +26,7 @@ const HOTKEY_MUTE = 'Ctrl+Shift+F10';
 function createWindow() {
   win = new BrowserWindow({
     width: 1060,
-    height: 820,
+    height: 900,
     minWidth: 940,
     minHeight: 700,
     show: false,
@@ -81,6 +81,29 @@ function createWindow() {
     }, probeMode ? 10000 : 4500);
   }
 }
+
+/* ───── Preset files ───── */
+const presetFilter = [{ name: 'Пресет Aura', extensions: ['json'] }];
+ipcMain.handle('preset:export', async (_e, preset) => {
+  if (!preset || typeof preset !== 'object' || typeof preset.v !== 'object') return false;
+  const safeName = String(preset.name || 'preset').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 40) || 'preset';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, { title: 'Сохранить пресет', defaultPath: `${safeName}.aura.json`, filters: presetFilter });
+  if (canceled || !filePath) return false;
+  fs.writeFileSync(filePath, JSON.stringify({ app: 'aura', version: 1, name: String(preset.name || ''), v: preset.v }, null, 2));
+  return true;
+});
+ipcMain.handle('preset:import', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: 'Загрузить пресет', filters: presetFilter, properties: ['openFile'] });
+  if (canceled || !filePaths[0]) return null;
+  try {
+    if (fs.statSync(filePaths[0]).size > 20000) return { error: true };
+    const data = JSON.parse(fs.readFileSync(filePaths[0], 'utf8'));
+    if (data?.app !== 'aura' || !data.v || typeof data.v !== 'object') return { error: true };
+    return { name: String(data.name || ''), v: data.v };
+  } catch {
+    return { error: true };
+  }
+});
 
 /* ───── Tray ───── */
 function showWindow() {

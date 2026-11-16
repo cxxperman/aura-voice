@@ -14,6 +14,7 @@ class VoiceDynamics extends AudioWorkletProcessor {
       { name: 'deess', defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
       { name: 'auto',  defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
       { name: 'pop',   defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
+      { name: 'pitch', defaultValue: 0,    minValue: -12,  maxValue: 12, automationRate: 'k-rate' },
     ];
   }
   constructor() {
@@ -22,6 +23,13 @@ class VoiceDynamics extends AudioWorkletProcessor {
     this.rms = 0.01; this.ag = 1;                                  // auto-level
     this.lp = 0; this.envHi = 0; this.dg = 1;                      // de-esser
     this.lo = 0; this.envLo = 0; this.pg = 1;                      // de-plosive
+    this.pb = new Float32Array(4096); this.pp = 0; this.ph = 0;    // pitch shifter
+  }
+  tap(delay) {
+    let at = this.pp - delay;
+    if (at < 0) at += 4096;
+    const i = at | 0, f = at - i;
+    return this.pb[i & 4095] * (1 - f) + this.pb[(i + 1) & 4095] * f;
   }
   process(inputs, outputs, p) {
     const input = inputs[0][0], out = outputs[0][0];
@@ -29,6 +37,7 @@ class VoiceDynamics extends AudioWorkletProcessor {
     const sr = sampleRate;
     const thr = Math.pow(10, p.gate[0] / 20), thrClose = thr * 0.63; // 4 dB of hysteresis
     const de = p.deess[0], auto = p.auto[0] > 0.5, pop = p.pop[0];
+    const ratio = Math.abs(p.pitch[0]) < 0.01 ? 1 : Math.pow(2, p.pitch[0] / 12), win = 0.045 * sr;
     const loA = 1 - Math.exp(-2 * Math.PI * 100 / sr), loRel = Math.exp(-1 / (0.06 * sr)), popThr = 0.04;
     const envRel = Math.exp(-1 / (0.05 * sr));
     const gAtt = 1 - Math.exp(-1 / (0.002 * sr)), gRel = 1 - Math.exp(-1 / (0.12 * sr));
@@ -40,6 +49,17 @@ class VoiceDynamics extends AudioWorkletProcessor {
 
     for (let n = 0; n < input.length; n++) {
       let x = input[n];
+      if (ratio !== 1) {
+        // Two taps sweep a short delay line and cross-fade where one has to jump back.
+        this.pb[this.pp] = x;
+        this.ph += (1 - ratio) / win;
+        if (this.ph >= 1) this.ph -= 1;
+        if (this.ph < 0) this.ph += 1;
+        const other = this.ph >= 0.5 ? this.ph - 0.5 : this.ph + 0.5;
+        const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * this.ph);
+        x = this.tap(2 + this.ph * win) * w + this.tap(2 + other * win) * (1 - w);
+        this.pp = (this.pp + 1) & 4095;
+      }
       const a = Math.abs(x);
       this.env = Math.max(a, this.env * envRel);
 
@@ -312,6 +332,7 @@ class Engine {
     p.get('deess').setValueAtTime(v.deess, t);
     p.get('auto').setValueAtTime(state.auto ? 1 : 0, t);
     p.get('pop').setValueAtTime(state.g.pop / 100, t);
+    p.get('pitch').setValueAtTime(state.v.pitch || 0, t);
 
     this.monitor = state.monitor;
     this._route();

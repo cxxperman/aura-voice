@@ -82,10 +82,12 @@ h1 {
 .status.error { color: #ff8a80; }
 
 .meters { width: 100%; margin-top: 22px; display: grid; gap: 10px; padding: 0 14px; }
-.meter { display: grid; grid-template-columns: 62px 1fr 52px; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); }
+.meter { display: grid; grid-template-columns: 74px 1fr 66px; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); }
 .meter b { font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-3); }
 .bar { height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; }
+.bar.lufs { position: relative; }
+.bar.lufs::after { content: ''; position: absolute; left: 73.3%; top: 0; bottom: 0; width: 2px; background: rgba(255, 255, 255, 0.75); }
 .bar.gr i { background: rgba(255, 255, 255, 0.7); transform-origin: right; }
 
 .actions { margin-top: 22px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
@@ -137,6 +139,10 @@ h1 {
 }
 .presets button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
+.preset-files { flex: none; display: flex; justify-content: flex-end; gap: 16px; margin: -6px 6px -4px; }
+.preset-files button { border: 0; background: none; padding: 2px 0; font: inherit; font-size: 12px; color: var(--text-3); cursor: pointer; transition: color 160ms ease; }
+.preset-files button:hover { color: var(--text); }
+.preset-files button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sliders { flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; padding: 18px 22px 18px; }
 .slider span { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
 .slider span b { font-weight: 500; }
