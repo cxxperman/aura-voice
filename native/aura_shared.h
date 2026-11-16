@@ -89,6 +89,7 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
       else if (key[2] == 'g') s.params.micG[band] = clamp(v, -18, 18);
       else s.params.micQ[band] = clamp(v, 0, 12);
     }
+    else if (key == "excite") s.params.excite = clamp(v / 100, 0, 1);
     else if (key == "warmth") s.params.warmth = clamp(v / 100, 0, 1);
     else if (key == "clarity") s.params.clarity = clamp(v / 100, 0, 1);
     else if (key == "air") s.params.air = clamp(v / 100, 0, 1);

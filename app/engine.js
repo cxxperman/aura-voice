@@ -407,11 +407,12 @@ class Engine {
       node.Q.setValueAtTime(q > 0 ? q : 0.707, t);
       set(node.gain, g);
     });
-    set(n.low.gain, v.warmth * 7.5 - 1);
-    set(n.mud.gain, -v.warmth * 3.5);
-    set(n.pres.gain, v.clarity * 6);
-    set(n.air.gain, v.air * 9);
-    set(n.exGain.gain, v.clarity * 0.22 + v.air * 0.12);
+    // The old macro tone filters stay flat: the frequency bands above do the tone now.
+    set(n.low.gain, 0);
+    set(n.mud.gain, 0);
+    set(n.pres.gain, 0);
+    set(n.air.gain, 0);
+    set(n.exGain.gain, (v.excite ?? 0.3) * 0.34);
 
     const thr = -12 - 26 * v.density;
     const ratio = 2 + 5 * v.density;

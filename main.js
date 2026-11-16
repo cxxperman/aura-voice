@@ -378,7 +378,7 @@ function refreshTray() {
       { label: 'Обработка голоса', type: 'checkbox', checked: ui.on, accelerator: hotkeys.power || undefined, registerAccelerator: false, click: () => command('power') },
       { label: 'Заглушить микрофон', type: 'checkbox', checked: ui.mute, enabled: ui.system, accelerator: hotkeys.mute || undefined, registerAccelerator: false, click: () => command('mute') },
       {
-        label: 'Характер',
+        label: 'Готовый звук',
         enabled: ui.presets.length > 0,
         submenu: ui.presets.map((p) => ({ label: p.name, type: 'radio', checked: p.id === ui.preset, click: () => command('preset', p.id) })),
       },

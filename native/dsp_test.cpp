@@ -462,10 +462,14 @@ static void runEffects() {
     return rmsDb(l, 24000, 48000);
   };
   aura::Params flat = base;
+  flat.warmth = flat.clarity = flat.air = 0; flat.excite = 0; flat.deess = 0; flat.pop = 0; // what the window sends now: tone comes from the bands alone
   flat.autoLevel = 0; flat.clean = 0; flat.density = 0; flat.width = 0; flat.space = 0;
   aura::Params cut = flat;
   cut.micF[0] = 1000; cut.micG[0] = -6; cut.micQ[0] = 1;
   const float at1k = toneDb(1000, cut) - toneDb(1000, flat), at200 = toneDb(200, cut) - toneDb(200, flat);
+  const float tilt = toneDb(100, flat) - toneDb(1000, flat), top = toneDb(8000, flat) - toneDb(1000, flat);
+  std::printf("neutral chain: 100 Hz %+.1f dB, 8 kHz %+.1f dB relative to 1 kHz\n", tilt, top);
+  CHECK(std::fabs(top) < 1.0f && tilt > -4.0f && tilt < 1.0f, "the chain is not flat with every band at zero (100 Hz %.1f dB, 8 kHz %.1f dB)", tilt, top);
   std::printf("microphone profile, -6 dB at 1 kHz: 1 kHz %+.1f dB, 200 Hz %+.1f dB\n", at1k, at200);
   CHECK(at1k < -3.5f && at1k > -8.0f, "microphone band changed 1 kHz by %.1f dB instead of about -6", at1k);
   CHECK(std::fabs(at200) < 1.5f, "microphone band at 1 kHz moved 200 Hz by %.1f dB", at200);

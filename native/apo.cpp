@@ -27,7 +27,8 @@ std::atomic<long> gObjects{0};
 // ───── Live settings: written by the watcher thread, read by the real-time thread ─────
 
 constexpr int kMic = aura::Params::kMicBands;
-constexpr int kValues = 30 + 3 * kMic;
+constexpr int kFixed = 31; // the scalar settings; the equalizer bands follow them
+constexpr int kValues = kFixed + 3 * kMic;
 
 struct Live {
   std::atomic<bool> enabled{true};
@@ -53,16 +54,16 @@ inline void raise(std::atomic<float>& meter, float value) {
 
 void store(const aura::Settings& s) {
   const aura::Params& p = s.params;
-  const float values[30] = {p.warmth, p.clarity, p.air, p.density, p.width, p.space, p.clean,
+  const float values[kFixed] = {p.warmth, p.clarity, p.air, p.density, p.width, p.space, p.clean,
                                  p.deess, p.autoLevel, p.inGainDb, p.outGainDb, p.pop, s.nsStrength,
                                  p.pitch, s.dereverb, p.fxPitch, p.fxRingHz, p.fxRingMix, p.fxEchoMs, p.fxEchoFb,
                                  p.fxEchoMix, p.fxPhone, p.fxDrive, p.fxTremHz, p.fxTremDepth, p.fxLowpassHz, p.fxSpace,
-                                 p.fxNatural, p.fxFormant, p.micHp};
-  for (int i = 0; i < 30; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
+                                 p.fxNatural, p.fxFormant, p.micHp, p.excite};
+  for (int i = 0; i < kFixed; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
   for (int i = 0; i < kMic; i++) {
-    gLive.v[30 + 3 * i].store(p.micF[i], std::memory_order_relaxed);
-    gLive.v[31 + 3 * i].store(p.micG[i], std::memory_order_relaxed);
-    gLive.v[32 + 3 * i].store(p.micQ[i], std::memory_order_relaxed);
+    gLive.v[kFixed + 3 * i].store(p.micF[i], std::memory_order_relaxed);
+    gLive.v[kFixed + 1 + 3 * i].store(p.micG[i], std::memory_order_relaxed);
+    gLive.v[kFixed + 2 + 3 * i].store(p.micQ[i], std::memory_order_relaxed);
   }
   gLive.enabled.store(s.enabled, std::memory_order_relaxed);
   gLive.mute.store(s.mute, std::memory_order_relaxed);
@@ -75,16 +76,16 @@ void store(const aura::Settings& s) {
 aura::Settings load() {
   aura::Settings s;
   aura::Params& p = s.params;
-  float* fields[30] = {&p.warmth, &p.clarity, &p.air, &p.density, &p.width, &p.space, &p.clean,
+  float* fields[kFixed] = {&p.warmth, &p.clarity, &p.air, &p.density, &p.width, &p.space, &p.clean,
                             &p.deess, &p.autoLevel, &p.inGainDb, &p.outGainDb, &p.pop, &s.nsStrength,
                             &p.pitch, &s.dereverb, &p.fxPitch, &p.fxRingHz, &p.fxRingMix, &p.fxEchoMs, &p.fxEchoFb,
                             &p.fxEchoMix, &p.fxPhone, &p.fxDrive, &p.fxTremHz, &p.fxTremDepth, &p.fxLowpassHz, &p.fxSpace,
-                            &p.fxNatural, &p.fxFormant, &p.micHp};
-  for (int i = 0; i < 30; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
+                            &p.fxNatural, &p.fxFormant, &p.micHp, &p.excite};
+  for (int i = 0; i < kFixed; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
   for (int i = 0; i < kMic; i++) {
-    p.micF[i] = gLive.v[30 + 3 * i].load(std::memory_order_relaxed);
-    p.micG[i] = gLive.v[31 + 3 * i].load(std::memory_order_relaxed);
-    p.micQ[i] = gLive.v[32 + 3 * i].load(std::memory_order_relaxed);
+    p.micF[i] = gLive.v[kFixed + 3 * i].load(std::memory_order_relaxed);
+    p.micG[i] = gLive.v[kFixed + 1 + 3 * i].load(std::memory_order_relaxed);
+    p.micQ[i] = gLive.v[kFixed + 2 + 3 * i].load(std::memory_order_relaxed);
   }
   s.enabled = gLive.enabled.load(std::memory_order_relaxed);
   s.mute = gLive.mute.load(std::memory_order_relaxed);

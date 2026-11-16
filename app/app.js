@@ -8,13 +8,12 @@ const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const PARAMS = [
   // `short` is the label under the band in the equalizer; the full name shows above it on hover.
-  { id: 'warmth', name: 'Тепло', short: 'Тепло', hint: 'Низ и тело голоса' },
-  { id: 'clarity', name: 'Ясность', short: 'Ясность', hint: 'Разборчивость, голос выходит вперёд' },
-  { id: 'air', name: 'Воздух', short: 'Воздух', hint: 'Блеск и дыхание на верхах' },
-  { id: 'density', name: 'Плотность', short: 'Плотность', hint: 'Ровный, «дикторский» звук' },
-  { id: 'width', name: 'Объём', short: 'Объём', hint: 'Ширина в стерео' },
-  { id: 'space', name: 'Пространство', short: 'Комната', hint: 'Лёгкая комната вокруг голоса' },
-  { id: 'deess', name: 'Мягкие «с» и «ш»', short: 'Свист', hint: 'Убирает резкие свистящие' },
+  // Processing: everything about the voice that is not its frequency balance.
+  { id: 'density', name: 'Плотность', short: 'Плотность', hint: 'Компрессор: тихое громче, громкое тише — ровный «дикторский» голос' },
+  { id: 'excite', name: 'Блеск', short: 'Блеск', hint: 'Добавляет гармоники поверх голоса: звучит чётче и «дороже» даже в маленьких колонках' },
+  { id: 'deess', name: 'Мягкие «с» и «ш»', short: 'Свист', hint: 'Приглушает резкие свистящие' },
+  { id: 'space', name: 'Комната', short: 'Комната', hint: 'Лёгкая реверберация вокруг голоса' },
+  { id: 'width', name: 'Объём', short: 'Объём', hint: 'Ширина в стерео. В звонках не слышна: там микрофон сводят в моно' },
   { id: 'pitch', name: 'Тон голоса', short: 'Тон', hint: 'Ниже или выше, в полутонах', min: -12, max: 12, format: (v) => (v > 0 ? `+${v}` : String(v)) },
   // These describe your room and your microphone technique, not a character, so presets leave them alone.
   { id: 'clean', name: 'Тишина в паузах', short: 'Паузы', hint: 'Глушит фон, пока вы молчите', global: true },
@@ -22,8 +21,8 @@ const PARAMS = [
   { id: 'pop', name: 'Анти-хлопок', short: 'Хлопки', hint: 'Смягчает удары «п» и «б» в микрофон', global: true },
   { id: 'dereverb', name: 'Эхо комнаты', short: 'Эхо', hint: 'Убирает гулкость помещения', global: true },
 ];
-// The frequency equalizer: real bands in decibels, for when «характер» is not enough — a bassier
-// voice, less boxiness, more bite. Yours, like the room settings: presets do not touch it.
+// The frequency equalizer: real bands in decibels — the one place the tone of the voice is set.
+// Presets move these bands; moving one by hand makes the preset «Свой».
 const dbFormat = (v) => (v > 0 ? `+${v} дБ` : v < 0 ? `−${-v} дБ` : '0 дБ');
 const FREQS = [
   { id: 'f100', f: 100, q: 0, name: 'Бас · 100 Гц', short: 'Бас', hint: 'Глубина и «радийный» низ. Вверх — голос басистее и крупнее' },
@@ -37,14 +36,15 @@ const FREQS = [
 ].map((p) => ({ ...p, eq: true, min: -12, max: 12, format: dbFormat }));
 PARAMS.push(...FREQS);
 
+// A preset is a frequency curve (the eight bands, dB) plus processing. Bands left out are flat.
 const PRESETS = {
-  studio: { name: 'Студия', hue: 212, v: { warmth: 55, clarity: 50, air: 45, density: 55, width: 35, space: 12, clean: 45, deess: 50, pitch: 0 } },
-  radio: { name: 'Радио', hue: 28, v: { warmth: 75, clarity: 65, air: 35, density: 85, width: 20, space: 5, clean: 55, deess: 60, pitch: 0 } },
-  velvet: { name: 'Бархат', hue: 278, v: { warmth: 90, clarity: 30, air: 25, density: 60, width: 45, space: 20, clean: 45, deess: 70, pitch: 0 } },
-  crystal: { name: 'Кристалл', hue: 176, v: { warmth: 30, clarity: 75, air: 80, density: 45, width: 50, space: 18, clean: 50, deess: 65, pitch: 0 } },
-  cinema: { name: 'Кино', hue: 348, v: { warmth: 80, clarity: 45, air: 40, density: 70, width: 70, space: 40, clean: 40, deess: 55, pitch: 0 } },
-  whisper: { name: 'Шёпот', hue: 140, v: { warmth: 45, clarity: 55, air: 90, density: 95, width: 60, space: 10, clean: 15, deess: 80, pitch: 0 } },
-  custom: { name: 'Свой', hue: 44, v: null }, // whatever the user last dialled in by hand
+  studio: { name: 'Студия', hue: 212, v: { density: 55, excite: 30, deess: 50, space: 12, width: 35, pitch: 0 }, eq: { f100: 3, f400: -2, f3200: 3, f11000: 4 } },
+  radio: { name: 'Радио', hue: 28, v: { density: 85, excite: 35, deess: 60, space: 5, width: 20, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f1600: 1, f3200: 4, f11000: 3 } },
+  velvet: { name: 'Бархат', hue: 278, v: { density: 60, excite: 15, deess: 70, space: 20, width: 45, pitch: 0 }, eq: { f100: 6, f200: 2, f400: -3, f3200: 1, f6000: -2, f11000: 2 } },
+  crystal: { name: 'Кристалл', hue: 176, v: { density: 45, excite: 45, deess: 65, space: 18, width: 50, pitch: 0 }, eq: { f100: 1, f400: -2, f3200: 4, f6000: 2, f11000: 7 } },
+  cinema: { name: 'Кино', hue: 348, v: { density: 70, excite: 25, deess: 55, space: 40, width: 70, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f800: -1, f3200: 3, f11000: 4 } },
+  whisper: { name: 'Шёпот', hue: 140, v: { density: 95, excite: 40, deess: 80, space: 10, width: 60, pitch: 0 }, eq: { f100: 2, f400: -1, f3200: 3, f6000: 3, f11000: 8 } },
+  custom: { name: 'Свой', hue: 44, v: null, eq: null }, // whatever the user last dialled in by hand
 };
 
 // Microphone profiles: a corrective EQ for the capsule, applied before everything else.
@@ -87,8 +87,8 @@ const DEFAULTS = {
   nsEngine: 0, // 0 = fast (RNNoise), 1 = high quality (DeepFilterNet)
   mic: 'auto', // microphone profile: 'auto' (by the device's name), 'none', 'measured', or an id from MIC_PROFILES
   micMeasured: null, // { hp, bands } built by auto-setup from the user's own voice
-  eq: {}, // frequency equalizer: band id → dB
-  eqTab: 'tone', // which bank the equalizer shows: 'tone' (character) or 'freq'
+  eq: { ...PRESETS.studio.eq }, // frequency equalizer: band id → dB
+  eqTab: 'freq', // which bank the equalizer shows: 'freq' or 'tone' (processing)
   fx: 'none', // ready voice, see VOICES
   fxCustom: { pitch: 0, formant: 0, robot: 0, drive: 0, echo: 0, space: 0, trem: 0, phone: 0 },
   fxKeys: {}, // voice id → global hotkey
@@ -105,12 +105,38 @@ const DEFAULTS = {
   monitorId: '',
 };
 
+// Before 0.15 the tone was three macro knobs (warmth, clarity, air) inside the preset. They are
+// now frequency bands: a named preset simply takes its new curve, a hand-made one is converted.
+function migrateTone(s, saved) {
+  const old = saved?.v;
+  if (old && 'warmth' in old) {
+    const named = s.preset !== 'custom' && PRESETS[s.preset]?.v;
+    if (named) {
+      s.v = { ...PRESETS[s.preset].v, pitch: old.pitch || 0 };
+      s.eq = { ...PRESETS[s.preset].eq };
+    } else {
+      const add = (id, db) => (s.eq[id] = clamp(Math.round((s.eq[id] || 0) + db), -12, 12));
+      add('f100', old.warmth * 0.075 - 1);
+      add('f400', -old.warmth * 0.035);
+      add('f3200', old.clarity * 0.06);
+      add('f11000', old.air * 0.09);
+      s.v = { density: old.density, excite: Math.round((old.clarity * 0.22 + old.air * 0.12) / 0.34), deess: old.deess, space: old.space, width: old.width, pitch: old.pitch || 0 };
+      s.custom = { v: { ...s.v }, eq: { ...s.eq } };
+    }
+    s.eqTab = 'freq';
+  }
+  for (const k of ['warmth', 'clarity', 'air', 'clean']) delete s.v[k];
+  if (s.custom && !s.custom.v) s.custom = null; // the old flat shape
+  return s;
+}
+
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY));
     const g = { ...DEFAULTS.g, ...saved?.g };
     if (saved?.ns === true && !saved.g) g.ns = 60; // older builds had an on/off switch
-    return { ...DEFAULTS, ...saved, eq: { ...saved?.eq }, g, v: { ...DEFAULTS.v, ...saved?.v }, hotkeys: { ...DEFAULTS.hotkeys, ...saved?.hotkeys }, fxCustom: { ...DEFAULTS.fxCustom, ...saved?.fxCustom }, fxKeys: { ...saved?.fxKeys } };
+    const merged = { ...DEFAULTS, ...saved, eq: { ...(saved?.eq || DEFAULTS.eq) }, g, v: { ...DEFAULTS.v, ...saved?.v }, hotkeys: { ...DEFAULTS.hotkeys, ...saved?.hotkeys }, fxCustom: { ...DEFAULTS.fxCustom, ...saved?.fxCustom }, fxKeys: { ...saved?.fxKeys } };
+    return migrateTone(merged, saved);
   } catch {
     return structuredClone(DEFAULTS);
   }
@@ -176,7 +202,8 @@ function pushSystem() {
   window.auraSystem.write(
     [
       `enabled=${enabled ? 1 : 0}`,
-      ...Object.keys(v).map((k) => `${k}=${v[k]}`),
+      'warmth=0', 'clarity=0', 'air=0', // the tone is in the frequency bands (m…) now
+      ...['density', 'excite', 'deess', 'space', 'width', 'pitch'].map((k) => `${k}=${v[k] ?? 0}`),
       `auto=${state.auto ? 1 : 0}`,
       `clean=${state.g.clean}`, // after the preset values: the last one wins
       `ns=${state.g.ns}`,
@@ -424,7 +451,9 @@ for (const [id, p] of Object.entries(PRESETS)) {
 function selectPreset(id) {
   if (!PRESETS[id]) return;
   state.preset = id;
-  state.v = { pitch: 0, ...(id === 'custom' ? state.custom || state.v : PRESETS[id].v) };
+  const from = id === 'custom' ? state.custom || { v: state.v, eq: state.eq } : PRESETS[id];
+  state.v = { pitch: 0, ...from.v };
+  state.eq = { ...from.eq };
   renderPreset();
   renderSliders(true);
   applyAll();
@@ -447,20 +476,22 @@ function renderPreset() {
 
 /* ───────── Preset files ───────── */
 $('#presetSave').addEventListener('click', async () => {
-  const saved = await window.auraSystem.exportPreset({ app: 'aura', version: 1, name: PRESETS[state.preset]?.name || 'Свой', v: state.v });
+  const saved = await window.auraSystem.exportPreset({ app: 'aura', version: 2, name: PRESETS[state.preset]?.name || 'Свой', v: state.v, eq: state.eq });
   if (saved) flash('Пресет сохранён в файл');
 });
 $('#presetLoad').addEventListener('click', async () => {
   const data = await window.auraSystem.importPreset();
   if (!data) return;
   if (data.error) return flash('Это не файл пресета Aura', true);
-  // Only the character travels in a file; room settings (noise, echo, gate) stay yours.
+  // Only the sound travels in a file; room settings (noise, echo, gate) stay yours.
   const v = {};
-  for (const p of PARAMS.filter((q) => !q.global && !q.eq)) {
-    const n = Number(data.v[p.id]);
-    v[p.id] = Number.isFinite(n) ? clamp(Math.round(n), p.min ?? 0, p.max ?? 100) : PRESETS.studio.v[p.id];
+  const eq = {};
+  for (const p of PARAMS.filter((q) => !q.global)) {
+    const n = Number((p.eq ? data.eq : data.v)?.[p.id]);
+    const value = Number.isFinite(n) ? clamp(Math.round(n), p.min ?? 0, p.max ?? 100) : p.eq ? 0 : PRESETS.studio.v[p.id];
+    if (p.eq) { if (value) eq[p.id] = value; } else v[p.id] = value;
   }
-  state.custom = v;
+  state.custom = { v, eq };
   selectPreset('custom');
   flash('Пресет загружен в «Свой»');
 });
@@ -478,11 +509,11 @@ const show = (p, v) => (p.format ? p.format(Number(v)) : String(v));
 // One instrument instead of a column of sliders: every setting is a band of an equalizer, and a
 // glowing curve runs through the handles, so a character reads as a shape. Two banks: what the
 // voice is like (presets move these) and what the room needs (they stay yours).
-const EQ_IDLE = ['Эквалайзер голоса', 'Тяните полосы вверх и вниз. Наведите на любую — здесь появится, что она меняет'];
+const EQ_IDLE = ['Эквалайзер голоса', 'Пресет ставит полосы, вы подправляете. Наведите на любую — здесь появится, что она меняет'];
 slidersEl.innerHTML = `<div class="eq-head"><b id="eqName"></b><em id="eqValue"></em><small id="eqHint"></small></div>
-<div class="eq-tools"><div class="segmented eq-tabs" id="eqTabs" role="radiogroup" aria-label="Что показывает эквалайзер"><button type="button" role="radio" data-bank="tone">Характер</button><button type="button" role="radio" data-bank="freq">Частоты</button></div><button type="button" class="link" id="eqReset">Сбросить частоты</button></div>
+<div class="eq-tools"><div class="segmented eq-tabs" id="eqTabs" role="radiogroup" aria-label="Что показывает эквалайзер"><button type="button" role="radio" data-bank="freq">Частоты</button><button type="button" role="radio" data-bank="tone">Обработка</button></div><button type="button" class="link" id="eqReset">Сбросить частоты</button></div>
 <div class="eq-body"><svg class="eq-curve" aria-hidden="true"><defs><linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="eq-stop-a"/><stop offset="1" class="eq-stop-b"/></linearGradient></defs></svg>
-<div class="eq-bank" data-bank="tone" data-title="Характер"></div><div class="eq-bank" data-bank="freq" data-title="Частоты, дБ"></div><div class="eq-bank room" data-title="Комната и микрофон"></div></div>`;
+<div class="eq-bank" data-bank="tone" data-title="Обработка"></div><div class="eq-bank" data-bank="freq" data-title="Частоты, дБ"></div><div class="eq-bank room" data-title="Комната и микрофон"></div></div>`;
 const eqSvg = slidersEl.querySelector('svg');
 const eqBody = slidersEl.querySelector('.eq-body');
 const eqBanks = [...slidersEl.querySelectorAll('.eq-bank')].map((el) => {
@@ -560,9 +591,9 @@ for (const p of PARAMS) {
     bank(p)[p.id] = Number(input.value);
     value.textContent = show(p, input.value);
     fill(input);
-    if (!p.global && !p.eq) {
-      // Hand-tuning a character turns it into the user's own preset, so it is never lost.
-      state.custom = { ...state.v };
+    if (!p.global) {
+      // Hand-tuning a sound turns it into the user's own preset, so it is never lost.
+      state.custom = { v: { ...state.v }, eq: { ...state.eq } };
       if (state.preset !== 'custom') {
         state.preset = 'custom';
         renderPreset();
@@ -598,6 +629,10 @@ $('#eqTabs').addEventListener('click', (e) => {
 });
 $('#eqReset').addEventListener('click', () => {
   state.eq = {};
+  state.custom = { v: { ...state.v }, eq: {} };
+  state.preset = 'custom';
+  renderPreset();
+  reportToTray();
   renderSliders(true);
   showEqTab('freq');
   applyAll();

@@ -33,6 +33,7 @@ struct Params {
   float outGainDb = 0.0f;
   float pop = 0.50f; // de-plosive: tames "p"/"b" blasts
   float pitch = 0.0f; // semitones, -12..+12; 0 = untouched
+  float excite = -1.0f; // harmonics on top of the voice, 0..1; below zero = follow clarity and air (older windows)
 
   // Voice effects — the "ready voices" (robot, cave, walkie-talkie…). All neutral at zero.
   float fxPitch = 0;      // semitones, added to `pitch`
@@ -547,11 +548,11 @@ class Chain {
       if (p.micQ[i] < 0.05f) { if (f < 1000.0f) mic_[i].lowshelf(sr_, f, g); else mic_[i].highshelf(sr_, f, g); }
       else mic_[i].peaking(sr_, f, std::clamp(p.micQ[i], 0.2f, 12.0f), g);
     }
-    low_.lowshelf(sr_, 150, p.warmth * 7.5f - 1.0f);
+    low_.lowshelf(sr_, 150, p.warmth > 0.001f ? p.warmth * 7.5f - 1.0f : 0.0f); // all three at zero = flat: the window's frequency bands do the tone
     mud_.peaking(sr_, 300, 1.1f, -p.warmth * 3.5f);
     pres_.peaking(sr_, 3600, 0.9f, p.clarity * 6.0f);
     air_.highshelf(sr_, 10500, p.air * 9.0f);
-    exT_ = p.clarity * 0.22f + p.air * 0.12f;
+    exT_ = p.excite >= 0.0f ? p.excite * 0.34f : p.clarity * 0.22f + p.air * 0.12f;
     thrDb_ = -12.0f - 26.0f * p.density;
     ratio_ = 2.0f + 5.0f * p.density;
     // Give back part of what the compressor takes, so "density" thickens rather than just gets louder.
