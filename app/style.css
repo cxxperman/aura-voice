@@ -209,3 +209,14 @@ select option { background: #1c1c22; color: #fff; }
 @media (prefers-reduced-transparency: reduce) {
   .card, .presets, .pill { backdrop-filter: none; background: #1a1a20; }
 }
+
+/* ───────── System module ───────── */
+.system { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 18px 16px 22px; }
+.system[hidden] { display: none; }
+.system b { display: block; font-weight: 600; }
+.system small { display: block; margin-top: 3px; font-size: 12px; line-height: 1.45; color: var(--text-2); user-select: text; }
+.system.warn b { color: #ffd60a; }
+.system-actions { flex: none; display: flex; gap: 8px; }
+.system .pill[hidden] { display: none; }
+.system #sysBtn { background: var(--accent-soft); border-color: hsl(var(--hue) 90% 66% / 0.45); }
+select:disabled, .switch:has(input:disabled) { opacity: 0.4; pointer-events: none; }

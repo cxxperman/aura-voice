@@ -1,4 +1,5 @@
-const { app, BrowserWindow, session } = require('electron');
+const { app, BrowserWindow, session, ipcMain } = require('electron');
+const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -28,6 +29,7 @@ function createWindow() {
       // The voice must keep flowing while the window is minimised.
       backgroundThrottling: false,
       contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
       sandbox: true,
     },
   });
@@ -51,6 +53,55 @@ function createWindow() {
     }, 4500);
   }
 }
+
+/* ───── System module (APO) ───── */
+const dataDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'Aura');
+const binDir = path.join(__dirname, 'native', 'bin');
+const installedDll = path.join(process.env.ProgramW6432 || process.env.ProgramFiles || 'C:\\Program Files', 'Aura', 'AuraAPO.dll');
+
+ipcMain.handle('system:status', () => {
+  const status = {
+    available: fs.existsSync(path.join(binDir, 'AuraSetup.exe')) && fs.existsSync(path.join(binDir, 'AuraAPO.dll')),
+    installed: fs.existsSync(installedDll),
+    alive: false,
+  };
+  try {
+    // The module rewrites status.txt once a second while Windows is running it.
+    status.alive = Date.now() - fs.statSync(path.join(dataDir, 'status.txt')).mtimeMs < 3000;
+  } catch {}
+  return status;
+});
+
+ipcMain.handle('system:write', (_e, text) => {
+  if (typeof text !== 'string' || text.length > 2000) return false;
+  try {
+    // Write-then-rename, so the module never reads a half-written file.
+    const tmp = path.join(dataDir, 'settings.tmp');
+    fs.writeFileSync(tmp, text);
+    fs.renameSync(tmp, path.join(dataDir, 'settings.txt'));
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('system:setup', (_e, action, unprotect) => {
+  if (action !== 'install' && action !== 'uninstall') return { ok: false, lines: [] };
+  const log = path.join(dataDir, 'setup.log');
+  try { fs.rmSync(log, { force: true }); } catch {}
+  const quote = (v) => `'${v.replace(/'/g, "''")}'`;
+  const args = action === 'install' && unprotect ? "'install','--unprotect'" : quote(action);
+  const command = `Start-Process -FilePath ${quote(path.join(binDir, 'AuraSetup.exe'))} -ArgumentList ${args} -Verb RunAs -Wait -WindowStyle Hidden`;
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true }, (err) => {
+      let lines = [];
+      try { lines = fs.readFileSync(log, 'utf8').split(/?
+/).filter(Boolean); } catch {}
+      const ok = lines[0] === 'result=ok';
+      resolve({ ok, cancelled: !!err && !lines.length, lines: lines.slice(1).filter((l) => !l.startsWith('device=')) });
+    });
+  });
+});
 
 app.whenReady().then(() => {
   // Only our own local page is ever loaded, so microphone / output selection is granted.

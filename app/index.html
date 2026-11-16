@@ -46,6 +46,14 @@
         <label class="switch"><span><b>Слышать себя</b><small>Только в наушниках, иначе будет эхо</small></span><input type="checkbox" id="monitor"><i></i></label>
       </div>
 
+      <div class="card system" id="systemCard" hidden>
+        <div><b id="sysTitle"></b><small id="sysText"></small></div>
+        <div class="system-actions">
+          <button class="pill" id="sysAlt" hidden>Убрать</button>
+          <button class="pill" id="sysBtn"></button>
+        </div>
+      </div>
+
       <div class="card devices">
         <label class="field"><span>Микрофон</span><select id="inputId"></select></label>
         <label class="field"><span>Выход в приложения</span><select id="outputId"></select></label>

@@ -196,7 +196,7 @@ class AuraApo final : public IAudioProcessingObject,
   // IAudioProcessingObjectConfiguration
   STDMETHODIMP LockForProcess(UINT32 numIn, APO_CONNECTION_DESCRIPTOR** in, UINT32 numOut, APO_CONNECTION_DESCRIPTOR** out) override {
     if (numIn != 1 || numOut != 1 || !in || !out || !in[0] || !out[0] || !in[0]->pFormat) return E_INVALIDARG;
-    if (locked_) return APOERR_ALREADY_LOCKED;
+    if (locked_) return APOERR_APO_LOCKED;
     UNCOMPRESSEDAUDIOFORMAT f;
     const HRESULT hr = in[0]->pFormat->GetUncompressedAudioFormat(&f);
     if (FAILED(hr)) return hr;
