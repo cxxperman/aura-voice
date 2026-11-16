@@ -4,6 +4,7 @@
 
 #include "aura_shared.h"
 #include "aura_denoise.h"
+#include "aura_dereverb.h"
 
 #include <mmreg.h>
 #include <ks.h>
@@ -22,7 +23,7 @@ std::atomic<long> gObjects{0};
 
 // ───── Live settings: written by the watcher thread, read by the real-time thread ─────
 
-constexpr int kValues = 13;
+constexpr int kValues = 15;
 
 struct Live {
   std::atomic<bool> enabled{true};
@@ -32,6 +33,7 @@ struct Live {
   std::atomic<unsigned> blocks{0};
   // Meters for the window: the audio thread raises them, the watcher reads and resets.
   std::atomic<float> peakIn{0}, peakOut{0}, reduction{0}, voice{0};
+  std::atomic<float> loudness{-70}; // short-term LUFS of what leaves the microphone
 } gLive;
 
 inline void raise(std::atomic<float>& meter, float value) {
@@ -41,7 +43,8 @@ inline void raise(std::atomic<float>& meter, float value) {
 void store(const aura::Settings& s) {
   const aura::Params& p = s.params;
   const float values[kValues] = {p.warmth, p.clarity, p.air, p.density, p.width, p.space, p.clean,
-                                 p.deess, p.autoLevel, p.inGainDb, p.outGainDb, p.pop, s.nsStrength};
+                                 p.deess, p.autoLevel, p.inGainDb, p.outGainDb, p.pop, s.nsStrength,
+                                 p.pitch, s.dereverb};
   for (int i = 0; i < kValues; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
   gLive.enabled.store(s.enabled, std::memory_order_relaxed);
   gLive.mute.store(s.mute, std::memory_order_relaxed);
@@ -51,7 +54,8 @@ aura::Settings load() {
   aura::Settings s;
   aura::Params& p = s.params;
   float* fields[kValues] = {&p.warmth, &p.clarity, &p.air, &p.density, &p.width, &p.space, &p.clean,
-                            &p.deess, &p.autoLevel, &p.inGainDb, &p.outGainDb, &p.pop, &s.nsStrength};
+                            &p.deess, &p.autoLevel, &p.inGainDb, &p.outGainDb, &p.pop, &s.nsStrength,
+                            &p.pitch, &s.dereverb};
   for (int i = 0; i < kValues; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
   s.enabled = gLive.enabled.load(std::memory_order_relaxed);
   s.mute = gLive.mute.load(std::memory_order_relaxed);
@@ -76,10 +80,10 @@ void writeStatus(const std::wstring& path) {
   auto db = [](float peak) { return 20.0 * std::log10(double(peak) + 1e-6); };
   char text[256];
   const int len = std::snprintf(
-      text, sizeof(text), "alive=1\r\nsr=%d\r\nch=%d\r\nblocks=%u\r\nenabled=%d\r\nmute=%d\r\nin=%.1f\r\nout=%.1f\r\ngr=%.1f\r\nvoice=%.2f\r\n",
+      text, sizeof(text), "alive=1\r\nsr=%d\r\nch=%d\r\nblocks=%u\r\nenabled=%d\r\nmute=%d\r\nin=%.1f\r\nout=%.1f\r\ngr=%.1f\r\nvoice=%.2f\r\nlufs=%.1f\r\n",
       gLive.sampleRate.load(), gLive.channels.load(), gLive.blocks.load(), gLive.enabled.load() ? 1 : 0,
       gLive.mute.load() ? 1 : 0, db(gLive.peakIn.exchange(0)), db(gLive.peakOut.exchange(0)),
-      -double(gLive.reduction.exchange(0)), double(gLive.voice.exchange(0)));
+      -double(gLive.reduction.exchange(0)), double(gLive.voice.exchange(0)), double(gLive.loudness.load()));
   const HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
   if (f == INVALID_HANDLE_VALUE) return;
@@ -251,6 +255,16 @@ class AuraApo final : public INonDelegatingUnknown,
       chain_ = aura::Chain();
       chain_.prepare(f.fFramesPerSecond);
       denoise_.prepare(f.fFramesPerSecond); // stays off at other sample rates
+      dereverb_.prepare(f.fFramesPerSecond);
+      // Loudness meter (ITU-R BS.1770 K-weighting: a high shelf for the head, a high-pass for rumble).
+      for (int c = 0; c < 2; c++) {
+        kShelf_[c] = aura::Biquad();
+        kShelf_[c].highshelf(f.fFramesPerSecond, 1682.0f, 4.0f);
+        kHigh_[c] = aura::Biquad();
+        kHigh_[c].highpass(f.fFramesPerSecond, 38.0f, 0.5f);
+        meanSquare_[c] = 0;
+      }
+      loudnessCoef_ = aura::onePole(1.5f, f.fFramesPerSecond);
     } catch (const std::bad_alloc&) {
       return E_OUTOFMEMORY;
     }
@@ -288,6 +302,7 @@ class AuraApo final : public INonDelegatingUnknown,
       if (dst != src) memcpy(dst, src, size_t(frames) * ch * sizeof(float));
       applyMute(dst, frames * ch, s.mute);
       raise(gLive.peakOut, muteGain_ * peakIn);
+      measureLoudness(dst, frames, ch);
       return;
     }
 
@@ -303,6 +318,7 @@ class AuraApo final : public INonDelegatingUnknown,
       denoise_.process(mono_.data(), int(frames), aura::denoiseAmount(s.nsStrength), aura::denoiseGateFloor(s.nsStrength));
       raise(gLive.voice, denoise_.voiceProbability());
     }
+    if (s.dereverb > 0.005f) dereverb_.process(mono_.data(), int(frames), s.dereverb);
     chain_.setParams(s.params);
     chain_.process(mono_.data(), left_.data(), right_.data(), int(frames));
 
@@ -323,6 +339,7 @@ class AuraApo final : public INonDelegatingUnknown,
     for (UINT32 i = 0; i < frames * ch; i++) peakOut = std::max(peakOut, std::fabs(dst[i]));
     raise(gLive.peakOut, peakOut);
     raise(gLive.reduction, -chain_.gainReductionDb());
+    measureLoudness(dst, frames, ch);
     gLive.blocks.fetch_add(1, std::memory_order_relaxed);
     _mm_setcsr(csr);
   }
@@ -330,6 +347,18 @@ class AuraApo final : public INonDelegatingUnknown,
   STDMETHODIMP_(UINT32) CalcOutputFrames(UINT32 inputFrames) override { return inputFrames; }
 
  private:
+  void measureLoudness(const float* samples, UINT32 frames, UINT32 ch) {
+    const UINT32 used = ch < 2 ? 1 : 2;
+    for (UINT32 i = 0; i < frames; i++) {
+      for (UINT32 c = 0; c < used; c++) {
+        const float y = kHigh_[c].process(kShelf_[c].process(samples[i * ch + c]));
+        meanSquare_[c] += (y * y - meanSquare_[c]) * loudnessCoef_;
+      }
+    }
+    const float sum = meanSquare_[0] + (used == 2 ? meanSquare_[1] : 0.0f);
+    gLive.loudness.store(-0.691f + 10.0f * std::log10(sum + 1e-10f), std::memory_order_relaxed);
+  }
+
   // Fade to silence and back over one buffer, so muting never clicks.
   void applyMute(float* samples, UINT32 count, bool mute) {
     const float target = mute ? 0.0f : 1.0f;
@@ -379,6 +408,10 @@ class AuraApo final : public INonDelegatingUnknown,
   float muteGain_ = 1.0f;
   aura::Chain chain_;
   aura::Denoiser denoise_;
+  aura::Dereverb dereverb_;
+  aura::Biquad kShelf_[2], kHigh_[2];
+  float meanSquare_[2] = {0, 0};
+  float loudnessCoef_ = 0;
   std::vector<float> mono_, left_, right_;
 };
 

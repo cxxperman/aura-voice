@@ -31,6 +31,7 @@ struct Params {
   float inGainDb = 0.0f;
   float outGainDb = 0.0f;
   float pop = 0.50f; // de-plosive: tames "p"/"b" blasts
+  float pitch = 0.0f; // semitones, -12..+12; 0 = untouched
 };
 
 inline float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
@@ -147,6 +148,44 @@ struct Dynamics {
   }
 };
 
+// Pitch shifter: two taps sweep through a short delay line (which is what changes the pitch)
+// and cross-fade into each other every time one of them has to jump back. No pitch detection,
+// so it never mistracks; costs ~22 ms of latency on average while it is in use.
+class PitchShifter {
+ public:
+  void prepare(float sr) {
+    window_ = 0.045f * sr;
+    size_ = 1;
+    while (float(size_) < window_ + 8) size_ <<= 1;
+    buf_.assign(size_t(size_), 0.0f);
+    pos_ = 0;
+    phase_ = 0;
+  }
+  inline float process(float x, float ratio) {
+    buf_[size_t(pos_)] = x;
+    phase_ += (1.0f - ratio) / window_; // the delay grows to lower the pitch, shrinks to raise it
+    if (phase_ >= 1.0f) phase_ -= 1.0f;
+    if (phase_ < 0.0f) phase_ += 1.0f;
+    const float other = phase_ >= 0.5f ? phase_ - 0.5f : phase_ + 0.5f;
+    const float w = 0.5f - 0.5f * std::cos(2.0f * kPi * phase_); // silent exactly where the tap jumps
+    const float out = tap(2.0f + phase_ * window_) * w + tap(2.0f + other * window_) * (1.0f - w);
+    pos_ = (pos_ + 1) & (size_ - 1);
+    return out;
+  }
+
+ private:
+  inline float tap(float delay) const {
+    float at = float(pos_) - delay;
+    if (at < 0) at += float(size_);
+    const int i0 = int(at);
+    const float frac = at - float(i0);
+    return buf_[size_t(i0 & (size_ - 1))] * (1 - frac) + buf_[size_t((i0 + 1) & (size_ - 1))] * frac;
+  }
+  std::vector<float> buf_;
+  int size_ = 1, pos_ = 0;
+  float window_ = 2160, phase_ = 0;
+};
+
 // Freeverb-style room: 8 damped combs + 4 all-passes per side.
 class Room {
  public:
@@ -208,6 +247,7 @@ class Chain {
     dyn_ = Dynamics();
     dyn_.prepare(sr_);
     room_.prepare(sr_);
+    pitch_.prepare(sr_);
     delay_.assign(size_t(0.05f * sr_) + 8, 0.0f);
     delayPos_ = 0;
     smooth_ = onePole(0.03f, sr_);
@@ -241,6 +281,7 @@ class Chain {
     revT_ = p.space * 4.5f;
     gateThr_ = p.clean > 0.01f ? dbToGain(-65.0f + p.clean * 40.0f) : 1e-5f;
     inT_ = dbToGain(p.inGainDb);
+    pitchRatio_ = std::fabs(p.pitch) < 0.01f ? 1.0f : std::pow(2.0f, p.pitch / 12.0f);
     outT_ = dbToGain(p.outGainDb);
   }
 
@@ -263,7 +304,9 @@ class Chain {
       widthG_ += (widthT_ - widthG_) * smooth_;
       revG_ += (revT_ - revG_) * smooth_;
 
-      float x = hpf_.process(in[n] * inG_);
+      float x = in[n] * inG_;
+      if (pitchRatio_ != 1.0f) x = pitch_.process(x, pitchRatio_);
+      x = hpf_.process(x);
       x = dyn_.process(x, gateThr_, deess, autoLevel, params_.pop);
       x = air_.process(pres_.process(low_.process(mud_.process(x))));
 
@@ -317,6 +360,8 @@ class Chain {
   Biquad hpf_, mud_, low_, pres_, air_, exIn_, exOut_, revHp_, revLp_;
   Dynamics dyn_;
   Room room_;
+  PitchShifter pitch_;
+  float pitchRatio_ = 1.0f;
   std::vector<float> delay_;
   int delayPos_ = 0;
   float phase1_ = 0, phase2_ = 0;

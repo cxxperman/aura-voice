@@ -1,6 +1,7 @@
 // Offline check of the voice chain: feeds it a synthetic "voice" and makes sure the result is sane.
 #include "aura_shared.h"
 #include "aura_denoise.h"
+#include "aura_dereverb.h"
 
 #include <chrono>
 #include <cstdio>
@@ -121,8 +122,94 @@ static void runDenoiser() {
         "strength mapping is off");
 }
 
+// A 200 Hz tone shifted up four semitones must come out near 252 Hz.
+static void runPitch() {
+  aura::PitchShifter shifter;
+  shifter.prepare(48000);
+  const float ratio = std::pow(2.0f, 4.0f / 12.0f);
+  int crossings = 0;
+  float prev = 0, peak = 0;
+  for (int i = 0; i < 96000; i++) {
+    const float y = shifter.process(0.5f * std::sin(2 * aura::kPi * 200.0f * float(i) / 48000.0f), ratio);
+    if (i >= 48000) {
+      if (prev <= 0 && y > 0) crossings++;
+      peak = std::max(peak, std::fabs(y));
+    }
+    prev = y;
+  }
+  std::printf("%-22s 200 Hz +4 semitones -> %d Hz (expected 252), peak %.2f\n", "pitch", crossings, peak);
+  CHECK(crossings > 240 && crossings < 264, "pitch shifter produced %d Hz", crossings);
+  CHECK(peak > 0.3f && peak < 0.6f, "pitch shifter changed the level: peak %.2f", peak);
+}
+
+// Tone bursts in a reverberant room (T60 0.6 s): the gaps between bursts must get drier, the bursts must stay.
+static void runDereverb() {
+  const int sr = 48000;
+  std::vector<float> dry(size_t(sr) * 4, 0.0f);
+  for (size_t i = 0; i < dry.size(); i++) {
+    const float t = float(i) / sr;
+    if (std::fmod(t, 0.6f) < 0.2f) {
+      for (int k = 1; k <= 12; k++) dry[i] += 0.04f * std::sin(2 * aura::kPi * 150.0f * k * t) / std::sqrt(float(k));
+    }
+  }
+  std::vector<float> ir(size_t(0.6f * sr), 0.0f);
+  unsigned seed = 4242;
+  for (size_t i = size_t(0.01f * sr); i < ir.size(); i++) {
+    seed = seed * 1664525u + 1013904223u;
+    ir[i] = (float(seed >> 8) / 8388608.0f - 1.0f) * 0.02f * std::exp(-6.9f * float(i) / float(ir.size()));
+  }
+  std::vector<float> wet(dry.size(), 0.0f);
+  for (size_t i = 0; i < dry.size(); i++) {
+    if (dry[i] == 0.0f) continue;
+    wet[i] += dry[i];
+    for (size_t j = size_t(0.01f * sr); j < ir.size() && i + j < wet.size(); j += 2) wet[i + j] += dry[i] * ir[j] * 2.0f;
+  }
+  std::vector<float> out = wet;
+  aura::Dereverb d;
+  d.prepare(float(sr));
+  for (size_t at = 0; at < out.size(); at += 480) d.process(out.data() + at, 480, 1.0f);
+  const int lag = d.latencySamples();
+
+  auto energy = [&](const std::vector<float>& x, int shift, bool bursts) {
+    double sum = 0;
+    size_t count = 0;
+    for (size_t i = size_t(sr); i + size_t(shift) < x.size(); i++) {
+      const float phase = std::fmod(float(i) / sr, 0.6f);
+      const bool inBurst = phase > 0.03f && phase < 0.19f, inGap = phase > 0.30f && phase < 0.58f;
+      if (bursts ? inBurst : inGap) {
+        sum += double(x[i + size_t(shift)]) * x[i + size_t(shift)];
+        count++;
+      }
+    }
+    return float(10.0 * std::log10(sum / double(count) + 1e-12));
+  };
+  bool finite = true;
+  for (float s : out) finite = finite && std::isfinite(s);
+  const float burstIn = energy(wet, 0, true), burstOut = energy(out, lag, true);
+  const float gapIn = energy(wet, 0, false), gapOut = energy(out, lag, false);
+  std::printf("%-22s bursts %6.1f -> %6.1f dB | reverb tails %6.1f -> %6.1f dB | latency %.1f ms\n", "room echo", burstIn, burstOut, gapIn,
+              gapOut, lag * 1000.0 / sr);
+  CHECK(finite, "dereverb output contains NaN or infinity");
+  CHECK(gapOut < gapIn - 3.0f, "reverb tails only dropped by %.1f dB", gapIn - gapOut);
+  CHECK(burstOut > burstIn - 2.5f, "dereverb dulled the direct sound by %.1f dB", burstIn - burstOut);
+
+  // Strength 0 must be transparent (apart from the delay).
+  std::vector<float> same = wet;
+  aura::Dereverb off;
+  off.prepare(float(sr));
+  for (size_t at = 0; at < same.size(); at += 480) off.process(same.data() + at, 480, 0.0f);
+  double err = 0, ref = 0;
+  for (size_t i = size_t(sr); i + size_t(lag) < wet.size(); i++) {
+    err += double(same[i + size_t(lag)] - wet[i]) * (same[i + size_t(lag)] - wet[i]);
+    ref += double(wet[i]) * wet[i];
+  }
+  CHECK(err < ref * 1e-4, "dereverb at strength 0 is not transparent (error %.1f dB)", 10.0 * std::log10(err / ref + 1e-12));
+}
+
 int main() {
   runDenoiser();
+  runPitch();
+  runDereverb();
   aura::Params def;
   aura::Params zero = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   aura::Params max = {1, 1, 1, 1, 1, 1, 1, 1, 1, 12, 0};
@@ -132,7 +219,8 @@ int main() {
     run("everything at maximum", sr, max, false);
   }
 
-  const aura::Settings s = aura::parseSettings("enabled=0\r\nwarmth=80\r\nfoo=1\r\nair=abc\r\ningain=99\r\n=5\r\nwidth=-3\r\nns=70\r\nmute=1\r\npop=250\r\n");
+  const aura::Settings s = aura::parseSettings("enabled=0\r\nwarmth=80\r\nfoo=1\r\nair=abc\r\ningain=99\r\n=5\r\nwidth=-3\r\nns=70\r\nmute=1\r\npop=250\r\npitch=-30\r\ndereverb=40\r\n");
+  CHECK(s.params.pitch == -12.0f && std::fabs(s.dereverb - 0.4f) < 1e-5f, "pitch/dereverb were not parsed");
   CHECK(std::fabs(s.nsStrength - 0.7f) < 1e-5f && s.mute && s.params.pop == 1.0f, "ns/mute/pop were not parsed");
   CHECK(!s.enabled, "enabled=0 was not parsed");
   CHECK(std::fabs(s.params.warmth - 0.8f) < 1e-5f, "warmth=%f", s.params.warmth);
