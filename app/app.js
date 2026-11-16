@@ -1196,6 +1196,18 @@ $('#padAdd').addEventListener('click', async () => {
   state.pads.push(...added);
   padsChanged();
 });
+$('#padClown').addEventListener('click', async () => {
+  const found = await window.auraSystem.importClownfish();
+  if (found === null) return flash('Clownfish на этом компьютере не найден', true);
+  // Skip what was brought over before: the same button twice must not double the board.
+  const have = new Set(state.pads.filter((p) => p.source === 'clownfish').map((p) => p.name));
+  const fresh = found.filter((p) => !have.has(p.name));
+  for (const p of found) if (!fresh.includes(p)) window.auraSystem.removeSound(p.id);
+  if (!fresh.length) return flash('Звуки из Clownfish уже перенесены');
+  state.pads.push(...fresh);
+  padsChanged();
+  flash(`Перенесено звуков из Clownfish: ${fresh.length}`, false, 5000);
+});
 $('#padStop').addEventListener('click', () => {
   state.playStop++;
   save();

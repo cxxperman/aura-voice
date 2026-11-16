@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('auraSystem', {
   // Soundboard
   addSounds: () => ipcRenderer.invoke('sounds:add'),
   readSound: (id) => ipcRenderer.invoke('sounds:read', id),
+  importClownfish: () => ipcRenderer.invoke('sounds:clownfish'),
   removeSound: (id) => ipcRenderer.invoke('sounds:remove', id),
   writeClip: (samples) => ipcRenderer.invoke('sounds:clip', samples),
   // UwUpad catalogue

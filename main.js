@@ -175,6 +175,26 @@ ipcMain.handle('sounds:add', async () => {
   }
   return added;
 });
+// Clownfish keeps the sounds of its player as plain files in its own folder: copy them over, so
+// someone moving from it finds their sounds here. Returns null when Clownfish is not installed.
+ipcMain.handle('sounds:clownfish', () => {
+  const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles].filter(Boolean).map((p) => path.join(p, 'ClownfishVoiceChanger', 'sounds'));
+  const dir = roots.find((p) => fs.existsSync(p));
+  if (!dir) return null;
+  fs.mkdirSync(soundsDir(), { recursive: true });
+  const added = [];
+  for (const name of fs.readdirSync(dir).sort().slice(0, 100)) {
+    try {
+      const ext = path.extname(name).toLowerCase();
+      const id = crypto.randomUUID() + ext;
+      const file = path.join(dir, name);
+      if (!soundId.test(id) || !fs.statSync(file).isFile() || fs.statSync(file).size > 30e6) continue;
+      fs.copyFileSync(file, path.join(soundsDir(), id));
+      added.push({ id, name: path.basename(name, path.extname(name)).slice(0, 40), source: 'clownfish' });
+    } catch {}
+  }
+  return added;
+});
 ipcMain.handle('sounds:read', (_e, id) => {
   if (typeof id !== 'string' || !soundId.test(id)) return null;
   try {
