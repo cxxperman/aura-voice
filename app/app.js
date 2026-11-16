@@ -47,12 +47,20 @@ PARAMS.push(...TONE);
 
 // A preset is a frequency curve (the eight bands, dB) plus processing. Bands left out are flat.
 const PRESETS = {
-  studio: { name: 'Студия', hue: 212, v: { density: 55, multiband: 30, sat: 20, excite: 30, deess: 50, space: 0, width: 20, pitch: 0 }, eq: { f100: 3, f400: -2, f3200: 3, f11000: 4 } },
-  radio: { name: 'Радио', hue: 28, v: { density: 85, multiband: 70, sat: 45, excite: 35, deess: 60, space: 0, width: 0, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f1600: 1, f3200: 4, f11000: 3 } },
-  velvet: { name: 'Бархат', hue: 278, v: { density: 60, multiband: 40, sat: 50, excite: 15, deess: 70, space: 8, width: 45, pitch: 0 }, eq: { f100: 6, f200: 2, f400: -3, f3200: 1, f6000: -2, f11000: 2 } },
-  crystal: { name: 'Кристалл', hue: 176, v: { density: 45, multiband: 30, sat: 10, excite: 45, deess: 65, space: 6, width: 50, pitch: 0 }, eq: { f100: 1, f400: -2, f3200: 4, f6000: 2, f11000: 7 } },
-  cinema: { name: 'Кино', hue: 348, v: { density: 70, multiband: 50, sat: 40, excite: 25, deess: 55, space: 25, width: 70, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f800: -1, f3200: 3, f11000: 4 } },
-  whisper: { name: 'Шёпот', hue: 140, v: { density: 95, multiband: 40, sat: 20, excite: 40, deess: 80, space: 0, width: 30, pitch: 0 }, eq: { f100: 2, f400: -1, f3200: 3, f6000: 3, f11000: 8 } },
+  // Built by auto-setup from the user's own voice (state.autoPreset): the one meant to be used.
+  auto: { name: 'Под вас', hue: 262, v: null, eq: null },
+  // Close and natural: a little body, the box taken out, light control. Nothing calls attention to itself.
+  studio: { name: 'Подкаст', hue: 212, v: { density: 55, multiband: 40, sat: 25, excite: 15, deess: 55, space: 0, width: 0, pitch: 0 }, eq: { f100: 3, f400: -3, f3200: 2, f11000: 2 } },
+  // The FM announcer: big lows, scooped lower middle, bright top, held firmly in place.
+  radio: { name: 'Эфир', hue: 28, v: { density: 78, multiband: 80, sat: 50, excite: 35, deess: 65, space: 0, width: 0, pitch: 0 }, eq: { f100: 5, f200: 2, f400: -4, f800: -2, f3200: 3, f6000: 2, f11000: 4 } },
+  // Cuts through game sound and music: lean lows, a lot of presence, dense.
+  crystal: { name: 'Стрим', hue: 176, v: { density: 80, multiband: 60, sat: 20, excite: 40, deess: 70, space: 0, width: 0, pitch: 0 }, eq: { f100: 2, f400: -3, f1600: 1, f3200: 5, f6000: 3, f11000: 3 } },
+  // Late-night voice-over: deep and soft, the top rounded off, thick with low harmonics.
+  velvet: { name: 'Бархат', hue: 278, v: { density: 65, multiband: 55, sat: 70, excite: 10, deess: 70, space: 0, width: 0, pitch: 0 }, eq: { f100: 6, f200: 3, f400: -4, f3200: -1, f6000: -2, f11000: 2 } },
+  // The trailer: large, squeezed hard, with a room around it.
+  cinema: { name: 'Кино', hue: 348, v: { density: 85, multiband: 70, sat: 60, excite: 25, deess: 60, space: 18, width: 40, pitch: 0 }, eq: { f100: 6, f200: 2, f400: -3, f3200: 3, f11000: 4 } },
+  // Almost untouched: for calls where the voice should simply be clear.
+  whisper: { name: 'Чистый', hue: 140, v: { density: 35, multiband: 20, sat: 0, excite: 10, deess: 50, space: 0, width: 0, pitch: 0 }, eq: { f100: 1, f400: -2, f3200: 2, f11000: 1 } },
   custom: { name: 'Свой', hue: 44, v: null, eq: null }, // whatever the user last dialled in by hand
 };
 
@@ -102,6 +110,7 @@ const DEFAULTS = {
   dehum: false, // notch out 50 Hz mains hum
   autoUpdate: true, // ask GitHub for a newer release at start
   voiceLevels: null, // third-octave spectrum of the user's own voice (dB), measured by auto-setup
+  autoPreset: null, // { v, eq, about } — the sound auto-setup designed for this voice
   fx: 'none', // ready voice, see VOICES
   fxCustom: { pitch: 0, formant: 0, robot: 0, drive: 0, echo: 0, space: 0, trem: 0, phone: 0 },
   fxKeys: {}, // voice id → global hotkey
@@ -470,8 +479,9 @@ for (const [id, p] of Object.entries(PRESETS)) {
 }
 function selectPreset(id) {
   if (!PRESETS[id]) return;
+  if (id === 'auto' && !state.autoPreset) return flash('Нажмите «Автонастройка» — она соберёт звук под ваш голос', true, 6000);
   state.preset = id;
-  const from = id === 'custom' ? state.custom || { v: state.v, eq: state.eq } : PRESETS[id];
+  const from = id === 'custom' ? state.custom || { v: state.v, eq: state.eq } : id === 'auto' ? state.autoPreset : PRESETS[id];
   state.v = { pitch: 0, ...from.v };
   state.eq = { ...from.eq };
   renderPreset();
@@ -816,7 +826,7 @@ const holdCompare = (on) => {
   if (on) {
     // The processing lives in the microphone: switch it off there for as long as the button is held.
     if (sys.installed && !engine.sampleMode) holdingOriginal = true;
-    else if (sampleRaw) engine.playBuffer(sampleRaw.buffer);
+    else if (sampleRaw) engine.playBuffer(sampleRaw.matched || sampleRaw.buffer);
     else engine.setBypass(true);
   } else {
     // Undo both ways of bypassing, whichever one the press used: the mode may have changed meanwhile.
@@ -865,6 +875,14 @@ async function renderSampleNow() {
   sampleBusy = false;
   if (out && sampleRaw && engine.sampleMode) {
     sampleRendered = toBuffer(new Float32Array(out), 2);
+    // Louder always sounds better, so the untouched take is played as loud as the processed one:
+    // what is compared is the tone and the cleanliness, not the volume.
+    const power = (d) => { let s = 0; for (let i = 0; i < d.length; i++) s += d[i] * d[i]; return s / d.length; };
+    const lift = Math.min(10, Math.sqrt(power(sampleRendered.getChannelData(0)) / (power(sampleRaw.mono) + 1e-12)));
+    let peak = 0;
+    for (const s of sampleRaw.mono) peak = Math.max(peak, Math.abs(s));
+    const g = Math.min(lift, 0.98 / (peak + 1e-9));
+    sampleRaw.matched = toBuffer(sampleRaw.mono.map((s) => s * g), 1);
     if (!held) engine.playBuffer(sampleRendered);
   }
   if (sampleAgain) {
@@ -876,6 +894,16 @@ function queueSampleRender() {
   if (!sampleRaw || !engine.sampleMode) return;
   clearTimeout(sampleTimer);
   sampleTimer = setTimeout(renderSampleNow, 90);
+}
+// Loops a take through the module's own chain: used by «Проба» and by auto-setup's before/after.
+function startSample(mono) {
+  sampleRaw = { mono, buffer: toBuffer(mono, 1) };
+  sampleRendered = null;
+  engine.playBuffer(sampleRaw.buffer); // the raw take for the moment the first render takes
+  renderSampleNow();
+  syncBypass();
+  pushSystem();
+  renderSample();
 }
 const sampleBtn = $('#sample');
 function renderSample() {
@@ -906,9 +934,7 @@ sampleBtn.addEventListener('click', async () => {
           const d = b.getChannelData(c);
           for (let i = 0; i < mono.length; i++) mono[i] += d[i] / b.numberOfChannels;
         }
-        sampleRaw = { mono, buffer: toBuffer(mono, 1) };
-        engine.playBuffer(sampleRaw.buffer); // the raw take for the moment the first render takes
-        renderSampleNow();
+        startSample(mono);
       } else {
         engine.playSample();
       }
@@ -1791,9 +1817,9 @@ const EQ_REGIONS = [
   { f: 9000, q: 0, lo: 6300, hi: 12500, max: 5 },
 ];
 // Averages the raw microphone's power spectrum while it is being listened to.
-function spectrumMeter() {
+function spectrumMeter(size = 4096) {
   const an = engine.ctx.createAnalyser();
-  an.fftSize = 4096;
+  an.fftSize = size;
   an.smoothingTimeConstant = 0;
   engine.n.inGain.connect(an);
   const frame = new Float32Array(an.frequencyBinCount);
@@ -1809,7 +1835,7 @@ function spectrumMeter() {
       engine.n.inGain.disconnect(an);
       const hz = engine.ctx.sampleRate / an.fftSize;
       // Power per third-octave band.
-      return { frames, bands: THIRDS.map((f) => {
+      return { frames, hz, bins: frames ? Array.from(sum, (p) => p / frames) : [], bands: THIRDS.map((f) => {
         let p = 0;
         for (let i = Math.ceil((f / 1.122) / hz); i < (f * 1.122) / hz && i < sum.length; i++) p += sum[i];
         return frames ? p / frames : 0;
@@ -1868,11 +1894,25 @@ tuneBtn.addEventListener('click', async () => {
   pushSystem();
   await new Promise((r) => setTimeout(r, 400));
 
-  const quiet = spectrumMeter();
-  const noise = percentile(await listen(3, 'Помолчите', () => quiet.grab()), 0.5);
+  const quiet = spectrumMeter(16384); // fine enough to tell mains hum from rumble
+  const noise = percentile(await listen(3, 'Помолчите три секунды — слушаю комнату', () => quiet.grab()), 0.5);
   const talk = spectrumMeter();
-  const speech = percentile(await listen(6, 'Говорите обычным голосом', (db) => db > noise + 12 && talk.grab()), 0.8); // only while the voice is there
-  const eq = measuredEq(talk.done(), quiet.done());
+  // The speech is also kept as a recording: it becomes the before/after at the end.
+  const rec = new MediaRecorder(engine.stream);
+  const chunks = [];
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  const recorded = new Promise((r) => (rec.onstop = r));
+  rec.start();
+  const levels = await listen(8, 'Говорите как обычно — расскажите, что делали сегодня', (db) => db > noise + 12 && talk.grab()); // only while the voice is there
+  rec.stop();
+  await recorded;
+  const speech = percentile(levels, 0.8);
+  const room = quiet.done();
+  const eq = measuredEq(talk.done(), room);
+  let take = null;
+  try {
+    take = await decodeMono(new Blob(chunks, { type: rec.mimeType }));
+  } catch {}
   holdingOriginal = false;
   tuning = false;
   tuneBtn.classList.remove('live');
@@ -1882,33 +1922,128 @@ tuneBtn.addEventListener('click', async () => {
     flash('Не расслышал голос. Попробуйте ещё раз, ближе к микрофону.', true);
     return;
   }
-  // Bring the voice to a healthy working level, put the gate just above the room, and pick
-  // noise suppression from how far the voice stands above the noise.
+  setStatus('Собираю звук под ваш голос…');
+  // 1. Level, room and noise.
   const gain = clamp(Math.round(-26 - speech), -12, 18);
   const snr = speech - noise;
   // The neural denoiser does the cleaning; the pause threshold only has to sit a little above the
   // room. Set high, it eats the quiet starts and ends of words — that is heard as a torn voice.
   state.g.clean = clamp(Math.round((noise + gain + 8 + 65) / 0.4), 5, 70);
   state.g.ns = snr > 45 ? 25 : snr > 30 ? 40 : 60;
+  state.g.pop = 50;
   state.auto = true;
   $('#auto').checked = true;
-  renderSliders();
-  const gainInput = $('#inGain');
-  gainInput.value = gain;
-  gainInput.dispatchEvent(new Event('input')); // updates the label, applies and saves
+  const hum = humLevel(room);
+  state.dehum = hum > 10;
+  $('#dehum').checked = state.dehum;
+  // 2. The microphone itself: flattened towards an average voice through a flat microphone.
+  let bright = 0;
   if (eq) {
+    bright = brightness(eq.levels);
     state.voiceLevels = eq.levels;
     delete eq.levels;
     state.micMeasured = eq;
     state.mic = 'measured';
     renderMic();
-    applyAll();
   }
+  // 3. The voice: its pitch, how much its level wanders, how bright it is — and a sound built on that.
+  const f0 = take ? voicePitch(take) : 0;
+  const active = levels.filter((l) => l > noise + 12);
+  const spread = active.length > 10 ? percentile(active, 0.9) - percentile(active, 0.3) : 8;
+  state.autoPreset = designVoice({ f0, snr, spread, bright });
+  if (state.micMeasured) state.micMeasured.hp = state.autoPreset.hp;
+  renderMic();
+  state.loud = -16; // a podcast's loudness: consistent, and clearly fuller than a bare microphone
+  loudSelect.value = '-16';
+  const gainInput = $('#inGain');
+  gainInput.value = gain;
+  gainInput.dispatchEvent(new Event('input')); // updates the label, applies and saves
   state.tuned = true;
-  save();
+  selectPreset('auto'); // applies, saves, tells the tray
   renderGuide();
-  flash(`Настроено: фон ${Math.round(noise)} дБ, голос ${Math.round(speech)} дБ${eq ? ', эквалайзер микрофона подстроен под ваш голос' : ''}`, false, 7000);
+  // 4. Before and after, on the user's own words.
+  const told = `${state.autoPreset.about}${state.dehum ? ', гул сети убран' : ''}`;
+  if (take && sys.installed && (await window.auraSystem.renderAvailable())) {
+    startSample(take);
+    flash(`Готово. Играет ваша запись с новым звуком — удерживайте «Оригинал», чтобы услышать, как было (громкость уравнена, сравнивается сам звук). ${told}`, false, 15000);
+  } else {
+    flash(`Готово: ${told}`, false, 9000);
+  }
 });
+
+// How far mains hum (50 Hz and its first harmonics) stands above what surrounds it, dB.
+function humLevel(room) {
+  if (!room.bins.length) return 0;
+  let worst = 0;
+  for (const f of [50, 100, 150]) {
+    const at = Math.round(f / room.hz);
+    let peak = 0;
+    for (let i = at - 1; i <= at + 1; i++) peak = Math.max(peak, room.bins[i] || 0);
+    const around = [];
+    for (let i = at - 8; i <= at + 8; i++) if (Math.abs(i - at) >= 4 && room.bins[i] > 0) around.push(room.bins[i]);
+    around.sort((x, y) => x - y);
+    const floor = around[around.length >> 1];
+    if (peak > 0 && floor > 0) worst = Math.max(worst, 10 * Math.log10(peak / floor));
+  }
+  return worst;
+}
+// Is the top of the voice (5-10 kHz) above or below where an average voice has it, dB.
+function brightness(levels) {
+  const mean = (lo, hi) => {
+    const xs = levels.map((v, k) => (v != null && THIRDS[k] >= lo && THIRDS[k] <= hi ? v - SPEECH[k] : null)).filter((v) => v != null);
+    return xs.length ? xs.reduce((p, c) => p + c, 0) / xs.length : 0;
+  };
+  return mean(5000, 10000) - mean(200, 4000);
+}
+// The speaking pitch: the median over the clearly voiced moments of the take, Hz (0 = not found).
+function voicePitch(mono) {
+  const W = 1920, found = [];
+  let top = 0;
+  for (let i = 0; i < mono.length; i += 97) top = Math.max(top, Math.abs(mono[i]));
+  for (let at = 0; at + W + 800 < mono.length; at += 1920) {
+    let e0 = 1e-12;
+    for (let i = 0; i < W; i += 2) e0 += mono[at + i] * mono[at + i];
+    if (Math.sqrt(e0 / (W / 2)) < top * 0.08) continue; // a pause
+    let best = 0, lag0 = 0;
+    for (let lag = 120; lag <= 800; lag += 2) { // 400 … 60 Hz
+      let c = 0, e1 = 1e-12;
+      for (let i = 0; i < W; i += 2) { c += mono[at + i] * mono[at + i + lag]; e1 += mono[at + i + lag] * mono[at + i + lag]; }
+      const s = c / Math.sqrt(e0 * e1);
+      if (s > best * 1.03) { best = s; lag0 = lag; }
+    }
+    if (best > 0.7) found.push(48000 / lag0);
+  }
+  found.sort((x, y) => x - y);
+  return found.length >= 5 ? found[found.length >> 1] : 0;
+}
+// A broadcast voice for this particular voice. The contour is the engineers' usual one — body
+// low down, the boxy lower middle taken out, presence, a little air — placed by the pitch of the
+// voice and held back where the measurements say it would hurt: no extra air or sparkle on a
+// noisy microphone (it only lifts the hiss), more de-essing on a bright voice, firmer levelling
+// for a voice that wanders in level.
+function designVoice({ f0, snr, spread, bright }) {
+  const kind = !f0 ? 'голос' : f0 < 110 ? 'низкий голос' : f0 < 150 ? 'мужской голос' : f0 < 180 ? 'высокий мужской или низкий женский голос' : 'женский голос';
+  const eq = !f0 || (f0 >= 110 && f0 < 150) ? { f100: 5, f200: 1, f400: -3 } // the classic: weight at 100, box out
+    : f0 < 110 ? { f100: 3, f200: -1, f400: -3 } // already deep: more would boom
+    : f0 < 180 ? { f100: 4, f200: 2, f400: -3 }
+    : { f100: 2, f200: 3, f400: -2, f800: -1 }; // a woman's body sits an octave up
+  // Every dB of top end is a dB of hiss as well: none on a noisy microphone, a little on a fair one.
+  const noisy = snr < 30, fair = snr < 38;
+  eq.f3200 = 3;
+  if (bright <= 2 && !noisy) eq.f6000 = 1;
+  const air = noisy ? 0 : fair ? 2 : bright > 2 ? 3 : 4;
+  if (air) eq.f11000 = air;
+  const v = {
+    density: clamp(Math.round(50 + (spread - 8) * 4), 45, 85),
+    multiband: 55,
+    sat: f0 && f0 < 110 ? 20 : 35,
+    excite: noisy ? 8 : fair ? 15 : 25,
+    deess: clamp(Math.round(55 + 5 * bright), 40, 80),
+    space: 0, width: 0, pitch: 0,
+  };
+  const about = `Определил ${kind}${f0 ? ` (около ${Math.round(f0)} Гц)` : ''}${noisy ? ', комната шумная — верх не поднимаю, чтобы не вытащить шипение' : fair ? ', шум заметный — верх поднят осторожно' : ''}`;
+  return { v, eq, about, hp: f0 >= 180 ? 100 : f0 && f0 < 110 ? 70 : 80 }; // the low cut sits just under the voice
+}
 
 /* ───────── Live spectrum behind the frequency bands ─────────
  * What is leaving the microphone right now, drawn on the same frequency axis as the handles
