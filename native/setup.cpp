@@ -2,6 +2,7 @@
 //
 //   AuraSetup install [--device {endpoint-guid}] [--unprotect]
 //   AuraSetup uninstall
+//   AuraSetup protect      (undo --unprotect, keep the module)
 //
 // Needs administrator rights (the manifest asks for them). Everything it does is written
 // to %ProgramData%\Aura\setup.log so the Aura window can show the outcome.
@@ -186,6 +187,35 @@ void detach(const std::wstring& guid) {
   RegCloseKey(fx);
 }
 
+// Put the audio engine's protected mode back exactly as it was before Aura touched it.
+bool restoreProtection(HKEY aura) {
+  DWORD changed = 0;
+  if (!aura || !getDword(aura, L"ChangedProtection", changed) || !changed) return false;
+  if (HKEY k = openKey(kAudioKey, false)) {
+    DWORD existed = 0, before = 0;
+    getDword(aura, L"ProtectionExisted", existed);
+    getDword(aura, L"ProtectionBefore", before);
+    if (existed) setDword(k, L"DisableProtectedAudioDG", before);
+    else RegDeleteValueW(k, L"DisableProtectedAudioDG");
+    RegCloseKey(k);
+  }
+  RegDeleteValueW(aura, L"ChangedProtection");
+  RegDeleteValueW(aura, L"ProtectionExisted");
+  RegDeleteValueW(aura, L"ProtectionBefore");
+  say(L"Защищённый режим звукового процесса возвращён как был.");
+  return true;
+}
+
+// Keep the module installed, but give the audio engine its protected mode back.
+int protect() {
+  HKEY aura = openKey(kAuraKey, false);
+  audioService(false);
+  if (!restoreProtection(aura)) say(L"Защищённый режим не менялся — возвращать нечего.");
+  if (aura) RegCloseKey(aura);
+  audioService(true);
+  return 0;
+}
+
 int install(std::wstring guid, bool unprotect) {
   if (guid.empty()) guid = defaultCaptureGuid();
   if (guid.empty()) {
@@ -312,18 +342,7 @@ int uninstall() {
   }
   if (!guid.empty()) detach(guid);
 
-  DWORD changed = 0;
-  if (aura && getDword(aura, L"ChangedProtection", changed) && changed) {
-    if (HKEY k = openKey(kAudioKey, false)) {
-      DWORD existed = 0, before = 0;
-      getDword(aura, L"ProtectionExisted", existed);
-      getDword(aura, L"ProtectionBefore", before);
-      if (existed) setDword(k, L"DisableProtectedAudioDG", before);
-      else RegDeleteValueW(k, L"DisableProtectedAudioDG");
-      RegCloseKey(k);
-      say(L"Защищённый режим звукового процесса возвращён как был.");
-    }
-  }
+  restoreProtection(aura);
   if (aura) RegCloseKey(aura);
 
   audioService(false);
@@ -361,6 +380,8 @@ int wmain(int argc, wchar_t** argv) {
     code = install(guid, unprotect);
   } else if (command == L"uninstall") {
     code = uninstall();
+  } else if (command == L"protect") {
+    code = protect();
   } else {
     say(L"Использование: AuraSetup install [--device {guid}] [--unprotect] | AuraSetup uninstall");
   }
