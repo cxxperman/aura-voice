@@ -35,18 +35,18 @@ const HOTKEY_MUTE = 'Ctrl+Shift+F10';
 let hotkeys = { power: HOTKEY_POWER, mute: HOTKEY_MUTE }; // what the window last asked for
 
 function createWindow() {
-  if (devRun && themeArg) nativeTheme.themeSource = themeArg.slice('--theme='.length) === 'light' ? 'light' : 'dark';
+  nativeTheme.themeSource = 'dark'; // Aura is a dark room whatever Windows is set to: its light needs darkness behind it
   win = new BrowserWindow({
     width: 1060,
     height: 900,
     minWidth: 940,
     minHeight: 700,
     show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#f2f2f7',
+    backgroundColor: '#09090d',
     title: 'Aura',
     icon: asset('icon.ico'),
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000', height: 30 },
+    titleBarOverlay: { color: '#00000000', symbolColor: '#ffffff', height: 30 },
     webPreferences: {
       // The voice must keep flowing while the window is minimised.
       backgroundThrottling: false,
@@ -58,14 +58,6 @@ function createWindow() {
   });
 
   win.removeMenu();
-  // Light or dark with Windows, live: the page follows through prefers-color-scheme, the window
-  // buttons and the colour shown before the page paints have to be told.
-  nativeTheme.on('updated', () => {
-    if (win.isDestroyed()) return;
-    const dark = nativeTheme.shouldUseDarkColors;
-    win.setBackgroundColor(dark ? '#1c1c1e' : '#f2f2f7');
-    win.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#ffffff' : '#000000', height: 30 });
-  });
   if (devRun && sizeArg) {
     const [w, h] = sizeArg.slice('--size='.length).split('x').map(Number);
     win.setMinimumSize(300, 300);

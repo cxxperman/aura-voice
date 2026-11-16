@@ -7,19 +7,20 @@ let fixture = null;
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const PARAMS = [
-  { id: 'warmth', name: 'Тепло', hint: 'Низ и тело голоса' },
-  { id: 'clarity', name: 'Ясность', hint: 'Разборчивость, голос выходит вперёд' },
-  { id: 'air', name: 'Воздух', hint: 'Блеск и дыхание на верхах' },
-  { id: 'density', name: 'Плотность', hint: 'Ровный, «дикторский» звук' },
-  { id: 'width', name: 'Объём', hint: 'Ширина в стерео' },
-  { id: 'space', name: 'Пространство', hint: 'Лёгкая комната вокруг голоса' },
-  { id: 'deess', name: 'Мягкие «с» и «ш»', hint: 'Убирает резкие свистящие' },
-  { id: 'pitch', name: 'Тон голоса', hint: 'Ниже или выше, в полутонах', min: -12, max: 12, format: (v) => (v > 0 ? `+${v}` : String(v)) },
-  // These two describe your room and your microphone technique, not a character, so presets leave them alone.
-  { id: 'clean', name: 'Тишина в паузах', hint: 'Глушит фон, пока вы молчите', global: true },
-  { id: 'ns', name: 'Шумоподавление', hint: 'Нейросеть: до 60 чистит фон, выше — глушит всё, кроме голоса', global: true },
-  { id: 'pop', name: 'Анти-хлопок', hint: 'Смягчает удары «п» и «б» в микрофон', global: true },
-  { id: 'dereverb', name: 'Эхо комнаты', hint: 'Убирает гулкость помещения', global: true },
+  // `short` is the label under the band in the equalizer; the full name shows above it on hover.
+  { id: 'warmth', name: 'Тепло', short: 'Тепло', hint: 'Низ и тело голоса' },
+  { id: 'clarity', name: 'Ясность', short: 'Ясность', hint: 'Разборчивость, голос выходит вперёд' },
+  { id: 'air', name: 'Воздух', short: 'Воздух', hint: 'Блеск и дыхание на верхах' },
+  { id: 'density', name: 'Плотность', short: 'Плотность', hint: 'Ровный, «дикторский» звук' },
+  { id: 'width', name: 'Объём', short: 'Объём', hint: 'Ширина в стерео' },
+  { id: 'space', name: 'Пространство', short: 'Комната', hint: 'Лёгкая комната вокруг голоса' },
+  { id: 'deess', name: 'Мягкие «с» и «ш»', short: 'Свист', hint: 'Убирает резкие свистящие' },
+  { id: 'pitch', name: 'Тон голоса', short: 'Тон', hint: 'Ниже или выше, в полутонах', min: -12, max: 12, format: (v) => (v > 0 ? `+${v}` : String(v)) },
+  // These describe your room and your microphone technique, not a character, so presets leave them alone.
+  { id: 'clean', name: 'Тишина в паузах', short: 'Паузы', hint: 'Глушит фон, пока вы молчите', global: true },
+  { id: 'ns', name: 'Шумоподавление', short: 'Шум', hint: 'Нейросеть: до 60 чистит фон, выше — глушит всё, кроме голоса', global: true },
+  { id: 'pop', name: 'Анти-хлопок', short: 'Хлопки', hint: 'Смягчает удары «п» и «б» в микрофон', global: true },
+  { id: 'dereverb', name: 'Эхо комнаты', short: 'Эхо', hint: 'Убирает гулкость помещения', global: true },
 ];
 
 const PRESETS = {
@@ -396,25 +397,86 @@ $('#presetLoad').addEventListener('click', async () => {
 const fill = (input) => {
   const p = ((input.value - input.min) / (input.max - input.min)) * 100;
   input.style.setProperty('--p', `${p}%`);
+  if (input._eq) queueEq(); // the curve follows its handles
 };
 const slidersEl = $('#sliders');
 const sliderInputs = {};
 const bank = (p) => (p.global ? state.g : state.v);
 const show = (p, v) => (p.format ? p.format(Number(v)) : String(v));
-for (const p of PARAMS) {
-  // Two groups with a heading each: what the voice is like, and what the room needs.
-  const groupTitle = p === PARAMS[0] ? 'Характер голоса' : p === PARAMS.find((q) => q.global) ? 'Комната и микрофон' : '';
-  if (groupTitle) {
-    const heading = document.createElement('div');
-    heading.className = 'slider-group';
-    heading.textContent = groupTitle;
-    slidersEl.append(heading);
+// One instrument instead of a column of sliders: every setting is a band of an equalizer, and a
+// glowing curve runs through the handles, so a character reads as a shape. Two banks: what the
+// voice is like (presets move these) and what the room needs (they stay yours).
+const EQ_IDLE = ['Эквалайзер голоса', 'Тяните полосы вверх и вниз. Наведите на любую — здесь появится, что она меняет'];
+slidersEl.innerHTML = `<div class="eq-head"><b id="eqName"></b><em id="eqValue"></em><small id="eqHint"></small></div>
+<div class="eq-body"><svg class="eq-curve" aria-hidden="true"><defs><linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="eq-stop-a"/><stop offset="1" class="eq-stop-b"/></linearGradient></defs></svg>
+<div class="eq-bank" data-title="Характер"></div><div class="eq-bank room" data-title="Комната и микрофон"></div></div>`;
+const eqSvg = slidersEl.querySelector('svg');
+const eqBody = slidersEl.querySelector('.eq-body');
+const eqBanks = [...slidersEl.querySelectorAll('.eq-bank')].map((el) => {
+  const make = (cls) => {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('class', cls);
+    eqSvg.append(path);
+    return path;
+  };
+  return { el, inputs: [], area: make('eq-area'), line: make('eq-line') };
+});
+const eqShow = (p, input) => {
+  $('#eqName').textContent = p ? p.name : EQ_IDLE[0];
+  $('#eqHint').textContent = p ? p.hint : EQ_IDLE[1];
+  $('#eqValue').textContent = p ? show(p, Math.round(input.value)) : '';
+};
+eqShow(null);
+let eqQueued = 0;
+function drawEq() {
+  eqQueued = 0;
+  const box = eqBody.getBoundingClientRect();
+  if (!box.width) return; // the page is hidden; the resize observer redraws when it comes back
+  eqSvg.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`);
+  for (const b of eqBanks) {
+    let floor = 0;
+    const pts = b.inputs.map((input) => {
+      const r = input.parentElement.getBoundingClientRect(); // the upright fader box; the input inside is rotated
+      const f = (input.value - input.min) / (input.max - input.min);
+      floor = r.bottom - box.top;
+      return [r.left + r.width / 2 - box.left, floor - 8 - f * (r.height - 16)]; // 8 = the handle's radius
+    });
+    const edge = b.el.getBoundingClientRect();
+    const x0 = edge.left - box.left;
+    const x1 = edge.right - box.left;
+    const all = [[x0, pts[0][1]], ...pts, [x1, pts[pts.length - 1][1]]];
+    let d = `M${all[0][0]},${all[0][1]}`;
+    for (let i = 1; i < all.length; i++) {
+      const [ax, ay] = all[i - 1];
+      const [bx, by] = all[i];
+      const mx = (ax + bx) / 2;
+      d += `C${mx},${ay} ${mx},${by} ${bx},${by}`; // level tangents at every handle: the classic EQ curve
+    }
+    b.line.setAttribute('d', d);
+    b.area.setAttribute('d', `${d}L${x1},${floor}L${x0},${floor}Z`);
   }
+}
+const queueEq = () => {
+  if (!eqQueued) eqQueued = requestAnimationFrame(drawEq);
+};
+new ResizeObserver(queueEq).observe(eqBody);
+eqBody.addEventListener('pointerleave', () => {
+  if (!eqBody.contains(document.activeElement)) eqShow(null);
+});
+for (const p of PARAMS) {
   const label = document.createElement('label');
-  label.className = 'slider';
-  label.innerHTML = `<span><b>${p.name}</b><em></em></span><input type="range" min="${p.min ?? 0}" max="${p.max ?? 100}" step="1"><small>${p.hint}</small>`;
+  label.className = 'band';
+  label.title = p.hint;
+  label.innerHTML = `<em></em><span class="fader"><input type="range" min="${p.min ?? 0}" max="${p.max ?? 100}" step="1" aria-orientation="vertical"></span><b>${p.short}</b>`;
   const input = label.querySelector('input');
   const value = label.querySelector('em');
+  input._eq = true;
+  input.setAttribute('aria-label', `${p.name}. ${p.hint}`);
+  eqBanks[p.global ? 1 : 0].inputs.push(input);
+  label.addEventListener('pointerenter', () => eqShow(p, input));
+  input.addEventListener('focus', () => eqShow(p, input));
+  input.addEventListener('blur', () => eqShow(null));
+  input.addEventListener('input', () => eqShow(p, input));
   input.addEventListener('input', () => {
     bank(p)[p.id] = Number(input.value);
     value.textContent = show(p, input.value);
@@ -439,7 +501,7 @@ for (const p of PARAMS) {
     });
   }
   sliderInputs[p.id] = { input, value };
-  slidersEl.append(label);
+  eqBanks[p.global ? 1 : 0].el.append(label);
 }
 // With `animate`, thumbs and fills glide to the new values together (a preset moved them, and the
 // eye should see which ones and how far). The numbers and the sound switch at once.

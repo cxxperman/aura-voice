@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; media-src 'self' blob: mediastream:; img-src 'self' data:">
-  <meta name="color-scheme" content="light dark">
+  <meta name="color-scheme" content="dark">
   <title>Aura</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -12,6 +12,7 @@
     <div class="intro-fish" id="introFish"></div>
     <div class="intro-name">Aura</div>
   </div>
+  <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
   <div class="drag" aria-hidden="true"></div>
 
   <div class="window">
@@ -71,9 +72,8 @@
         </div>
         <div class="presets segmented" id="presets" role="radiogroup" aria-label="Характер голоса"></div>
 
-        <div class="sliders" id="sliders"></div>
+        <div class="group eq" id="sliders"></div>
 
-        <div class="section-title"><span>Режимы</span></div>
         <div class="group toggles">
           <label class="switch"><span><b>Авто-уровень</b><small>Выравнивает громкость, вытягивает тихий микрофон</small></span><input type="checkbox" id="auto"><i></i></label>
           <label class="switch"><span><b>Заглушить микрофон</b><small>Тишина для всех программ<span id="muteKey"></span></small></span><input type="checkbox" id="mute"><i></i></label>
