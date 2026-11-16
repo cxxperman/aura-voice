@@ -1000,6 +1000,39 @@ function drawOrb() {
   g.fill();
 }
 
+/* ───────── Launch animation ───────── */
+(function intro() {
+  const overlay = $('#intro');
+  const SPRITE = ['....##......', '...####....#', '..######..##', '.###########', '##E########.', '##E########.', '.###########', '..######..##', '...####....#', '....##......'];
+  const fish = $('#introFish');
+  SPRITE.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      const cell = document.createElement('i');
+      if (row[x] !== '.') {
+        cell.className = row[x] === 'E' ? 'eye' : 'body';
+        // Drawn nose to tail, with a little scatter so it shimmers rather than wipes.
+        cell.style.animationDelay = `${Math.round(x * 26 + Math.abs(y - 4.5) * 14 + Math.random() * 70)}ms`;
+      }
+      fish.append(cell);
+    }
+  });
+
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    removeEventListener('pointerdown', finish, true);
+    removeEventListener('keydown', finish, true);
+    overlay.classList.add('leaving');
+    document.body.classList.remove('intro-on');
+    setTimeout(() => overlay.remove(), 800);
+  };
+  if (TEST) return finish();
+  addEventListener('pointerdown', finish, true);
+  addEventListener('keydown', finish, true);
+  setTimeout(finish, REDUCED_MOTION ? 500 : 1550);
+})();
+
 /* ───────── Boot ───────── */
 async function boot() {
   $('#mute').disabled = true; // until the module is known to be installed

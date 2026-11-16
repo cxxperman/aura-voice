@@ -16,6 +16,7 @@ const asset = (name) => path.join(__dirname, 'assets', name);
 
 // Let the audio engine start on launch, without waiting for a click.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+if (shotArg) app.disableHardwareAcceleration(); // dev screenshots: software rendering works with the display off
 
 if (!devRun && !app.requestSingleInstanceLock()) app.quit();
 
@@ -73,6 +74,18 @@ function createWindow() {
   });
 
   if (shotArg || testMode || probeMode) {
+    // dev: AURA_EARLY_SHOT=<ms after load> saves an extra frame, e.g. to look at the launch animation
+    if (shotArg && process.env.AURA_EARLY_SHOT) {
+      win.webContents.once('did-finish-load', () => {
+        setTimeout(async () => {
+          try {
+            fs.writeFileSync(shotArg.slice('--shot='.length).replace(/.png$/, '-early.png'), (await win.webContents.capturePage()).toPNG());
+          } catch (err) {
+            console.log('[early shot] failed:', err.message);
+          }
+        }, Number(process.env.AURA_EARLY_SHOT));
+      });
+    }
     if (shotArg && clickSelector) {
       setTimeout(async () => {
         const result = await win.webContents
@@ -94,7 +107,7 @@ function createWindow() {
         }
         // A text summary of what is on screen, for when a picture is not enough.
         const summary = await win.webContents
-          .executeJavaScript("JSON.stringify({ tab: document.querySelector('.tabs [aria-selected=true]')?.textContent, pages: [...document.querySelectorAll('.page')].filter((p) => !p.hidden).map((p) => p.dataset.page), pads: [...document.querySelectorAll('.pad')].map((e) => e.textContent), added: document.querySelector('.catalog-row .pill')?.textContent, rows: document.querySelectorAll('.catalog-row').length, first: [...document.querySelectorAll('.catalog-title')].slice(0, 3).map((e) => e.textContent), note: document.querySelector('#catalogNote')?.textContent, status: document.querySelector('#status')?.textContent })")
+          .executeJavaScript("JSON.stringify({ tab: document.querySelector('.tabs [aria-selected=true]')?.textContent, pages: [...document.querySelectorAll('.page')].filter((p) => !p.hidden).map((p) => p.dataset.page), pads: [...document.querySelectorAll('.pad')].map((e) => e.textContent), added: document.querySelector('.catalog-row .pill')?.textContent, rows: document.querySelectorAll('.catalog-row').length, first: [...document.querySelectorAll('.catalog-title')].slice(0, 3).map((e) => e.textContent), note: document.querySelector('#catalogNote')?.textContent, status: document.querySelector('#status')?.textContent, intro: !!document.querySelector('#intro'), body: document.body.className, heroOpacity: getComputedStyle(document.querySelector('.hero')).opacity, fishCells: document.querySelectorAll('#introFish i').length })")
           .catch((err) => 'summary failed: ' + err.message);
         console.log('[dom]', summary);
       }
