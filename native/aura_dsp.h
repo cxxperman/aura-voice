@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 
@@ -46,6 +47,8 @@ struct Params {
   float fxTremDepth = 0;  // 0..1
   float fxLowpassHz = 0;  // muffling low-pass; 0 = off
   float fxSpace = 0;      // extra room, added to `space`
+  float fxNatural = 0;    // 1 = shift the pitch but keep the timbre (NaturalShifter), for "another person" voices
+  float fxFormant = 0;    // semitones the timbre itself is moved by, natural mode only
 };
 
 inline float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
@@ -244,6 +247,115 @@ class PitchShifter {
   bool aligned_ = true;
 };
 
+// Natural pitch shifter (pitch-synchronous overlap-add).
+//
+// The plain shifter above resamples the voice, so the pitch and the timbre move together — up
+// gives a chipmunk, down a giant. A different *person* needs the pitch to move while the mouth
+// and throat (the formants) stay roughly where they are. So this one cuts the voice into
+// grains two pitch periods long and lays them out again at a different spacing: the spacing
+// sets the new pitch, the grains themselves keep the timbre. Reading each grain a little
+// faster or slower moves the timbre on its own, by a small amount.
+//
+// It needs to know the pitch period, so it measures it ~190 times a second, and it has to
+// hold nearly three periods of audio before it can speak: about 36 ms of latency.
+class NaturalShifter {
+ public:
+  void prepare(float sr) {
+    minPeriod_ = int(sr / 400.0f);
+    maxPeriod_ = int(sr / 80.0f);
+    latency_ = int(float(maxPeriod_) * 2.9f) + 8;
+    size_ = 1;
+    while (size_ < latency_ * 4) size_ <<= 1;
+    in_.assign(size_t(size_), 0.0f);
+    out_.assign(size_t(size_), 0.0f);
+    score_.assign(size_t(maxPeriod_ / 2 + 2), 0.0f);
+    n_ = 0;
+    period_ = sr / 150.0f;
+    synth_ = source_ = 0;
+  }
+  int latency() const { return latency_; }
+  float period() const { return period_; }
+
+  inline float process(float x, float pitchRatio, float formantRatio) {
+    in_[size_t(n_ & (size_ - 1))] = x;
+    if ((n_ & 255) == 255) measure();
+    // Lay down every grain whose source audio has fully arrived.
+    while (synth_ + double(period_) * (0.5 + formantRatio) + 2.0 <= double(n_)) grain(pitchRatio, formantRatio);
+    const int64_t m = n_ - latency_;
+    float y = 0;
+    if (m >= 0) {
+      y = out_[size_t(m & (size_ - 1))];
+      out_[size_t(m & (size_ - 1))] = 0;
+    }
+    n_++;
+    return y;
+  }
+
+ private:
+  void grain(float pitchRatio, float formantRatio) {
+    const double P = period_;
+    // Take the grain a whole number of periods after the previous one, as close to "now" as that
+    // allows: repeating a period raises the pitch, skipping one lowers it, and the phase stays intact.
+    const double k = std::max(0.0, std::floor((synth_ - source_) / P + 0.5));
+    source_ += k * P;
+    const int half = int(P);
+    const float gain = 1.0f / std::max(pitchRatio, 0.5f); // grains overlap pitchRatio-fold
+    const int64_t centre = int64_t(synth_ + 0.5);
+    for (int i = -half; i <= half; i++) {
+      const int64_t at = centre + i;
+      if (at <= n_ - latency_) continue; // already played: never write into the past
+      const float w = 0.5f + 0.5f * std::cos(kPi * float(i) / float(half));
+      out_[size_t(at & (size_ - 1))] += sample(source_ + double(i) * formantRatio) * w * gain;
+    }
+    synth_ += P / std::max(pitchRatio, 0.5f);
+  }
+  inline float sample(double where) const {
+    if (where < 0 || where > double(n_ - 1)) return 0;
+    const int64_t i0 = int64_t(where);
+    const float frac = float(where - double(i0));
+    return in_[size_t(i0 & (size_ - 1))] * (1 - frac) + in_[size_t((i0 + 1) & (size_ - 1))] * frac;
+  }
+  inline float back(int samples) const { return in_[size_t((n_ - samples) & (size_ - 1))]; } // 0 = newest
+
+  // Pitch period by autocorrelation, on every other sample. Of several equally good candidates
+  // (a period, two periods, three…) the shortest is the true one.
+  void measure() {
+    const int window = maxPeriod_ * 2;
+    float e0 = 1e-9f;
+    for (int i = 0; i < window; i += 2) e0 += back(i) * back(i);
+    if (e0 < 1e-7f * float(window)) return; // silence: keep the last period
+    float best = 0;
+    int count = 0;
+    for (int lag = minPeriod_; lag <= maxPeriod_; lag += 2, count++) {
+      float c = 0, e1 = 1e-9f;
+      for (int i = 0; i < window; i += 2) {
+        const float b = back(i + lag);
+        c += back(i) * b;
+        e1 += b * b;
+      }
+      score_[size_t(count)] = c / std::sqrt(e0 * e1);
+      best = std::max(best, score_[size_t(count)]);
+    }
+    if (best < 0.4f) return; // unvoiced (s, sh, breath): any period will do, keep the last
+    for (int j = 1; j + 1 < count; j++) {
+      if (score_[size_t(j)] >= 0.88f * best && score_[size_t(j)] >= score_[size_t(j - 1)] && score_[size_t(j)] >= score_[size_t(j + 1)]) {
+        // Refine between the two-sample steps with a parabola through the peak.
+        const float a = score_[size_t(j - 1)], b = score_[size_t(j)], c = score_[size_t(j + 1)];
+        const float shift = (a - c) / (2.0f * (a - 2.0f * b + c) - 1e-9f);
+        const float lag = float(minPeriod_ + 2 * j) + 2.0f * std::clamp(shift, -0.5f, 0.5f);
+        period_ += (lag - period_) * 0.6f;
+        return;
+      }
+    }
+  }
+
+  std::vector<float> in_, out_, score_;
+  int size_ = 1, latency_ = 0, minPeriod_ = 120, maxPeriod_ = 600;
+  int64_t n_ = 0;
+  float period_ = 320;
+  double synth_ = 0, source_ = 0;
+};
+
 // The effects stage, between the voice chain and the room/limiter. Everything is bypassed
 // (one comparison per sample) until an effect is switched on.
 class Effects {
@@ -376,6 +488,7 @@ class Chain {
     dyn_.prepare(sr_);
     room_.prepare(sr_);
     pitch_.prepare(sr_);
+    natural_.prepare(sr_);
     fx_.prepare(sr_);
     delay_.assign(size_t(0.05f * sr_) + 8, 0.0f);
     delayPos_ = 0;
@@ -412,6 +525,8 @@ class Chain {
     inT_ = dbToGain(p.inGainDb);
     const float semitones = std::clamp(p.pitch + p.fxPitch, -14.0f, 14.0f);
     pitchRatio_ = std::fabs(semitones) < 0.01f ? 1.0f : std::pow(2.0f, semitones / 12.0f);
+    formantRatio_ = std::pow(2.0f, std::clamp(p.fxFormant, -5.0f, 5.0f) / 12.0f);
+    useNatural_ = p.fxNatural > 0.5f && (pitchRatio_ != 1.0f || std::fabs(p.fxFormant) > 0.01f);
     fx_.set(p);
     outT_ = dbToGain(p.outGainDb);
   }
@@ -436,7 +551,8 @@ class Chain {
       revG_ += (revT_ - revG_) * smooth_;
 
       float x = in[n] * inG_;
-      if (pitchRatio_ != 1.0f) x = pitch_.process(x, pitchRatio_);
+      if (useNatural_) x = natural_.process(x, pitchRatio_, formantRatio_);
+      else if (pitchRatio_ != 1.0f) x = pitch_.process(x, pitchRatio_);
       x = hpf_.process(x);
       x = dyn_.process(x, gateThr_, deess, autoLevel, params_.pop);
       x = air_.process(pres_.process(low_.process(mud_.process(x))));
@@ -492,7 +608,9 @@ class Chain {
   Dynamics dyn_;
   Room room_;
   PitchShifter pitch_;
-  float pitchRatio_ = 1.0f;
+  float pitchRatio_ = 1.0f, formantRatio_ = 1.0f;
+  bool useNatural_ = false;
+  NaturalShifter natural_;
   Effects fx_;
   std::vector<float> delay_;
   int delayPos_ = 0;

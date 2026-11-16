@@ -286,6 +286,88 @@ static void runPitchQuality() {
   CHECK(aligned < plain * 0.8, "aligning the taps should cut the loudness wobble (%.3f vs %.3f)", aligned / 12, plain / 12);
 }
 
+// The natural shifter's promise, measured: the pitch moves by the ratio asked for, while the
+// vowel's resonance stays where it was. A buzz at `f0` is passed through a resonance at 900 Hz
+// (a stand-in for a vowel formant), shifted, and then we look at what came out.
+static std::vector<float> vowel(float f0, float formantHz, int seconds) {
+  std::vector<float> x(size_t(48000) * seconds);
+  const float r = 0.985f, w = 2 * aura::kPi * formantHz / 48000.0f;
+  const float a1 = -2 * r * std::cos(w), a2 = r * r;
+  float y1 = 0, y2 = 0;
+  double phase = 0;
+  for (size_t i = 0; i < x.size(); i++) {
+    phase += f0 / 48000.0;
+    float pulse = 0;
+    if (phase >= 1.0) { phase -= 1.0; pulse = 1.0f; } // one glottal pulse per period
+    const float y = pulse - a1 * y1 - a2 * y2;
+    y2 = y1;
+    y1 = y;
+    x[i] = y * 0.02f;
+  }
+  return x;
+}
+static float pitchOf(const std::vector<float>& x, size_t from) {
+  double best = -1;
+  int bestLag = 0;
+  for (int lag = 100; lag <= 700; lag++) {
+    double c = 0;
+    for (size_t i = from; i < from + 9600; i++) c += double(x[i]) * x[i + size_t(lag)];
+    if (c > best * 1.02) { best = c; bestLag = lag; } // prefer the shorter of near-equal peaks
+  }
+  return 48000.0f / float(bestLag);
+}
+static float resonanceOf(const std::vector<float>& x, size_t from) {
+  float bestHz = 0;
+  double best = 0;
+  for (float hz = 400; hz <= 2200; hz += 25) {
+    double band = 0;
+    for (float f = hz - 100; f <= hz + 100; f += 20) { // energy in a 200 Hz band
+      double re = 0, im = 0;
+      for (size_t i = 0; i < 9600; i++) {
+        const double a = 2.0 * 3.14159265358979 * f * double(i) / 48000.0;
+        re += x[from + i] * std::cos(a);
+        im += x[from + i] * std::sin(a);
+      }
+      band += re * re + im * im;
+    }
+    if (band > best) { best = band; bestHz = hz; }
+  }
+  return bestHz;
+}
+static void runNatural() {
+  struct Case { float f0, semitones, formant; };
+  for (const Case c : {Case{120, 5, 0}, Case{120, -4, 0}, Case{200, 4, 0}, Case{200, -5, 0}, Case{120, 0, 3}, Case{150, 6, 1.5f}}) {
+    const std::vector<float> in = vowel(c.f0, 900, 3);
+    const float ratio = std::pow(2.0f, c.semitones / 12.0f), formant = std::pow(2.0f, c.formant / 12.0f);
+    aura::NaturalShifter natural;
+    natural.prepare(48000);
+    aura::PitchShifter plain;
+    plain.prepare(48000);
+    std::vector<float> a(in.size()), b(in.size());
+    bool finite = true;
+    float peak = 0;
+    for (size_t i = 0; i < in.size(); i++) {
+      a[i] = natural.process(in[i], ratio, formant);
+      b[i] = plain.process(in[i], ratio);
+      finite = finite && std::isfinite(a[i]);
+      peak = std::max(peak, std::fabs(a[i]));
+    }
+    const size_t from = 48000;
+    const float inPeak = *std::max_element(in.begin(), in.end());
+    const float gotPitch = pitchOf(a, from), wantPitch = c.f0 * ratio;
+    const float gotRes = resonanceOf(a, from), wantRes = 900 * formant, plainRes = resonanceOf(b, from);
+    std::printf("natural f0=%3.0f %+2.0f st, timbre %+4.1f st: pitch %5.1f Hz (want %5.1f) | resonance %4.0f Hz (want %4.0f; plain shifter moves it to %4.0f) | level x%.2f\n",
+                c.f0, c.semitones, c.formant, gotPitch, wantPitch, gotRes, wantRes, plainRes, peak / inPeak);
+    CHECK(finite, "natural shifter produced NaN or infinity");
+    CHECK(std::fabs(gotPitch / wantPitch - 1) < 0.06f, "natural shifter: pitch %.1f Hz instead of %.1f", gotPitch, wantPitch);
+    CHECK(std::fabs(gotRes - wantRes) <= 130, "natural shifter: resonance moved to %.0f Hz, should be near %.0f", gotRes, wantRes);
+    CHECK(peak / inPeak > 0.4f && peak / inPeak < 2.5f, "natural shifter changed the level by x%.2f", peak / inPeak);
+  }
+  aura::NaturalShifter lat;
+  lat.prepare(48000);
+  std::printf("latency: natural shifter                   %5.1f ms\n", lat.latency() * 1000.0 / 48000.0);
+}
+
 // Every ready voice must stay finite, inside full scale and audible; the cave must actually echo.
 static void runEffects() {
   struct Voice { const char* name; aura::Params p; };
@@ -300,7 +382,8 @@ static void runEffects() {
     {"megaphone", with([](aura::Params& p) { p.fxPhone = 1; p.fxDrive = 0.8f; p.fxEchoMs = 90; p.fxEchoFb = 0.2f; p.fxEchoMix = 0.25f; })},
     {"cave", with([](aura::Params& p) { p.fxEchoMs = 260; p.fxEchoFb = 0.5f; p.fxEchoMix = 0.45f; p.fxSpace = 0.8f; })},
     {"underwater", with([](aura::Params& p) { p.fxLowpassHz = 600; p.fxTremHz = 5; p.fxTremDepth = 0.5f; })},
-    {"everything", with([](aura::Params& p) { p.fxPitch = -12; p.fxRingHz = 2000; p.fxRingMix = 1; p.fxEchoMs = 600; p.fxEchoFb = 0.85f; p.fxEchoMix = 1; p.fxPhone = 1; p.fxDrive = 1; p.fxTremHz = 30; p.fxTremDepth = 1; p.fxLowpassHz = 8000; p.fxSpace = 1; })},
+    {"another person", with([](aura::Params& p) { p.fxPitch = 5; p.fxNatural = 1; p.fxFormant = 1.5f; })},
+    {"everything", with([](aura::Params& p) { p.fxNatural = 1; p.fxFormant = 5; p.fxPitch = -12; p.fxRingHz = 2000; p.fxRingMix = 1; p.fxEchoMs = 600; p.fxEchoFb = 0.85f; p.fxEchoMix = 1; p.fxPhone = 1; p.fxDrive = 1; p.fxTremHz = 30; p.fxTremDepth = 1; p.fxLowpassHz = 8000; p.fxSpace = 1; })},
   };
   const std::vector<float> in = voice(48000);
   auto render = [&](const aura::Params& p, std::vector<float>& l) {
@@ -424,6 +507,7 @@ static void runLatency(const char* model) {
 int main(int argc, char** argv) {
   runLatency(argc > 1 ? argv[1] : nullptr);
   runPitchQuality();
+  runNatural();
   runEffects();
   (void)argc;
   (void)argv;
