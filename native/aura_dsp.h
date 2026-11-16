@@ -175,7 +175,7 @@ class PitchShifter {
   void prepare(float sr) {
     window_ = 0.040f * sr;
     search_ = int(0.008f * sr);
-    span_ = int(0.008f * sr);
+    span_ = int(0.014f * sr); // longer than one period of the lowest voices, or they cannot be matched
     size_ = 1;
     while (size_ < int(window_) + 2 * search_ + span_ + 16) size_ <<= 1;
     buf_.assign(size_t(size_), 0.0f);
@@ -284,7 +284,7 @@ class Effects {
     drive_ += (driveTarget_ - drive_) * smooth_;
     tremDepth_ += (tremTarget_ - tremDepth_) * smooth_;
 
-    if (drive_ > 0.001f) x = std::tanh(x * (1.0f + drive_ * 24.0f)) / (1.0f + drive_ * 2.2f); // megaphone grit, level kept sane
+    if (drive_ > 0.001f) x = std::tanh(x * (1.0f + drive_ * 24.0f)) / (1.0f + drive_ * 6.0f); // megaphone grit, level kept sane
     if (phone_) x = lp_.process(hp_.process(x)) * 1.6f;
     if (muffle_) x = low_.process(x);
     if (ringMix_ > 0.001f) { // multiply by a tone: the classic robot

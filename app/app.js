@@ -44,6 +44,7 @@ const DEFAULTS = {
   custom: null,
   mute: false,
   nsEngine: 0, // 0 = fast (RNNoise), 1 = high quality (DeepFilterNet)
+  fx: 'none', // ready voice, see VOICES
   pads: [], // soundboard: [{ id: stored file name, name, source?, key? }]
   hotkeys: { power: 'Ctrl+Shift+F9', mute: 'Ctrl+Shift+F10' },
   onboarded: false,
@@ -116,6 +117,7 @@ function pushSystem() {
       `pop=${state.g.pop}`,
       `dereverb=${state.g.dereverb}`,
       `mute=${state.mute ? 1 : 0}`,
+      ...Object.entries(fxValues()).map(([k, value]) => `${k}=${value}`),
       `ingain=${state.inGain}`,
       `outgain=${state.outGain}`,
     ].join('\r\n') + '\r\n'
@@ -181,6 +183,7 @@ function renderSystem() {
     text = sys.alive ? 'Модуль работает. Голос остаётся обработанным, даже когда это окно закрыто.' : 'Включите сферу, чтобы проверить, что модуль работает.';
     action = 'Убрать';
   }
+  renderVoices();
   card.classList.toggle('warn', silent || !!sys.detached);
   // The card lives on the Settings page: flag the tab when it needs attention.
   tabButtons.find((b) => b.dataset.tab === 'setup').classList.toggle('attention', silent || !!sys.detached);
@@ -247,7 +250,8 @@ function flash(text, kind = false, ms = kind ? 7000 : 4000) {
 // What the optional stages cost: each one has to look a little way ahead.
 function latencyText() {
   const deep = state.nsEngine === 1 && moduleLevels?.engine === 1;
-  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (state.v.pitch ? 22 : 0);
+  const shifted = (state.v.pitch || 0) + fxValues().fxpitch !== 0;
+  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (shifted ? 25 : 0);
   return ms ? `задержка около ${ms} мс` : 'без задержки';
 }
 function liveStatus() {
@@ -929,6 +933,62 @@ $('#padStop').addEventListener('click', () => {
   });
 }
 
+/* ───────── Ready voices ─────────
+ * One tap changes who you sound like. These sit on top of the character and the sliders, and
+ * live in the module, so every program hears them. Values are the module's own units. */
+const FX_ZERO = { fxpitch: 0, fxring: 0, fxringmix: 0, fxecho: 0, fxechofb: 0, fxechomix: 0, fxphone: 0, fxdrive: 0, fxtrem: 0, fxtremdepth: 0, fxlp: 0, fxspace: 0 };
+const VOICES = {
+  none: { name: 'Обычный голос', hint: 'Без эффекта', p: {} },
+  robot: { name: 'Робот', hint: 'Металлический, ровный', p: { fxring: 55, fxringmix: 85 } },
+  alien: { name: 'Пришелец', hint: 'Звенящий, не отсюда', p: { fxring: 190, fxringmix: 60, fxpitch: 3 } },
+  helium: { name: 'Гелий', hint: 'Как после шарика', p: { fxpitch: 7 } },
+  chipmunk: { name: 'Бурундук', hint: 'Совсем тоненький', p: { fxpitch: 11 } },
+  higher: { name: 'Выше', hint: 'Чуть тоньше своего', p: { fxpitch: 4 } },
+  lower: { name: 'Ниже', hint: 'Чуть глубже своего', p: { fxpitch: -3 } },
+  giant: { name: 'Великан', hint: 'Низкий и большой', p: { fxpitch: -6 } },
+  demon: { name: 'Демон', hint: 'Низко, с хрипом и залом', p: { fxpitch: -8, fxdrive: 30, fxspace: 50 } },
+  phone: { name: 'Телефон', hint: 'Узкая полоса, как в трубке', p: { fxphone: 1 } },
+  radio: { name: 'Рация', hint: 'Трубка с перегрузом', p: { fxphone: 1, fxdrive: 55 } },
+  megaphone: { name: 'Мегафон', hint: 'Громкоговоритель на площади', p: { fxphone: 1, fxdrive: 80, fxecho: 90, fxechofb: 20, fxechomix: 25 } },
+  cave: { name: 'Пещера', hint: 'Долгое эхо', p: { fxecho: 260, fxechofb: 50, fxechomix: 45, fxspace: 80 } },
+  hall: { name: 'Собор', hint: 'Большой гулкий зал', p: { fxspace: 100 } },
+  underwater: { name: 'Под водой', hint: 'Глухо и с бульканьем', p: { fxlp: 600, fxtrem: 5, fxtremdepth: 50 } },
+  shaky: { name: 'Дрожащий', hint: 'Голос трясётся', p: { fxtrem: 8, fxtremdepth: 70 } },
+};
+function fxValues() {
+  return { ...FX_ZERO, ...(VOICES[state.fx] || VOICES.none).p };
+}
+const voicesEl = $('#voices');
+for (const [id, voice] of Object.entries(VOICES)) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'voice';
+  b.dataset.id = id;
+  b.setAttribute('role', 'radio');
+  const name = document.createElement('b');
+  name.textContent = voice.name;
+  const hint = document.createElement('small');
+  hint.textContent = voice.hint;
+  b.append(name, hint);
+  b.addEventListener('click', () => {
+    state.fx = id;
+    save();
+    pushSystem();
+    renderVoices();
+    liveStatus();
+  });
+  voicesEl.append(b);
+}
+function renderVoices() {
+  if (!VOICES[state.fx]) state.fx = 'none';
+  for (const b of voicesEl.children) b.setAttribute('aria-checked', String(b.dataset.id === state.fx));
+  const note = $('#fxNote');
+  // The effects run inside the microphone module, on the processed voice.
+  const problem = !sys.installed ? 'Нужен модуль в микрофоне: встройте его на вкладке «Настройки».' : !engine.running ? 'Включите сферу — эффекты накладываются на обработанный голос.' : '';
+  note.textContent = problem || 'Слышат все программы. Проверить на себе — «Слышать себя» на вкладке «Голос».';
+  note.classList.toggle('warn', !!problem);
+}
+
 /* ───────── Hotkeys ─────────
  * Global shortcuts live in the main process; this side decides what they are. */
 let hotkeyFailed = new Set(); // combinations Windows refused (another program owns them)
@@ -1210,6 +1270,7 @@ function showTab(name) {
     localStorage.setItem('aura.tab', name);
   } catch {}
   if (name === 'setup') loadCaptureDevices();
+  if (name === 'effects') renderVoices();
   if (name === 'sounds' && !catalog.started) {
     catalog.started = true; // nothing is fetched until the user actually opens the page
     loadCatalog(true);

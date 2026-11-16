@@ -44,6 +44,7 @@
     <section class="controls">
       <nav class="tabs" id="tabs" role="tablist" aria-label="Разделы">
         <button type="button" role="tab" data-tab="voice">Голос</button>
+        <button type="button" role="tab" data-tab="effects">Эффекты</button>
         <button type="button" role="tab" data-tab="sounds">Звуки</button>
         <button type="button" role="tab" data-tab="setup">Настройки</button>
       </nav>
@@ -68,6 +69,13 @@
           <label class="switch"><span><b>Авто-уровень</b><small>Выравнивает громкость, вытягивает тихий микрофон</small></span><input type="checkbox" id="auto"><i></i></label>
           <label class="switch"><span><b>Заглушить микрофон</b><small>Тишина для всех программ<span id="muteKey"></span></small></span><input type="checkbox" id="mute"><i></i></label>
           <label class="switch"><span><b>Слышать себя</b><small>Только в наушниках, иначе будет эхо</small></span><input type="checkbox" id="monitor"><i></i></label>
+        </div>
+      </div>
+
+      <div class="page" data-page="effects" hidden>
+        <div class="card voices">
+          <div class="voices-head"><b>Готовые голоса</b><small id="fxNote"></small></div>
+          <div class="voices-grid" id="voices" role="radiogroup" aria-label="Готовый голос"></div>
         </div>
       </div>
 
