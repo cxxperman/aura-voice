@@ -1,0 +1,38 @@
+name: dfn-experiment
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ['native/dfn/**', '.github/workflows/dfn.yml']
+
+jobs:
+  dfn:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch DeepFilterNet v0.5.6
+        shell: bash
+        run: git clone --depth 1 --branch v0.5.6 https://github.com/Rikorose/DeepFilterNet third_party/dfn
+      - uses: actions/cache@v4
+        with:
+          path: |
+            third_party/dfn/target
+            ~/.cargo/registry
+          key: dfn-0.5.6-staticlib-v1
+      - name: Build libDF as a static library
+        shell: bash
+        working-directory: third_party/dfn
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          rustc --version
+          cargo rustc -p deep_filter --release --locked --lib --features capi --crate-type staticlib -- --print native-static-libs
+          ls -la target/release/*.lib
+      - name: Build the test
+        shell: bash
+        run: |
+          cmake -S native/dfn -B native/dfn/build -A x64 -T ClangCL "-DDF_LIB=$(cygpath -m "$PWD/third_party/dfn/target/release/df.lib")"
+          cmake --build native/dfn/build --config Release
+      - name: Run
+        shell: bash
+        run: native/dfn/build/Release/dfn_test.exe third_party/dfn/models/DeepFilterNet3_onnx.tar.gz

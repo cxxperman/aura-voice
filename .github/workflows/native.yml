@@ -2,6 +2,7 @@ name: build
 
 on:
   push:
+    paths-ignore: ['native/dfn/**', '.github/workflows/dfn.yml']
   workflow_dispatch:
 
 jobs:
