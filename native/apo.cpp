@@ -125,8 +125,11 @@ HANDLE gWatchStop = nullptr;
 struct Clip {
   std::vector<float> samples;
 };
-std::atomic<Clip*> gClip{nullptr};
-std::atomic<unsigned> gClipSerial{0};
+// Up to eight sounds at once: each new clip takes the next slot, replacing the oldest.
+constexpr int kVoices = 8;
+std::atomic<Clip*> gVoice[kVoices];
+std::atomic<unsigned> gVoiceSerial[kVoices];
+int gNextVoice = 0; // watcher thread only
 std::vector<std::pair<Clip*, ULONGLONG>> gRetiredClips; // watcher thread only
 
 void loadClip() {
@@ -171,8 +174,10 @@ void loadClip() {
     delete clip;
     return;
   }
-  if (Clip* old = gClip.exchange(clip, std::memory_order_acq_rel)) gRetiredClips.push_back({old, GetTickCount64()});
-  gClipSerial.fetch_add(1, std::memory_order_release);
+  const int slot = gNextVoice;
+  gNextVoice = (gNextVoice + 1) % kVoices;
+  if (Clip* old = gVoice[slot].exchange(clip, std::memory_order_acq_rel)) gRetiredClips.push_back({old, GetTickCount64()});
+  gVoiceSerial[slot].fetch_add(1, std::memory_order_release);
 }
 
 void sweepRetiredClips() {
@@ -439,9 +444,11 @@ class AuraApo final : public INonDelegatingUnknown,
     gLive.sampleRate = int(f.fFramesPerSecond);
     gLive.channels = int(channels_);
     sampleRate_ = f.fFramesPerSecond;
-    clipSerial_ = gClipSerial.load();
+    for (int v = 0; v < kVoices; v++) {
+      voiceSerial_[v] = gVoiceSerial[v].load();
+      voicePos_[v] = SIZE_MAX; // a stream that opens mid-clip does not join it
+    }
     clipStop_ = gLive.playStop.load();
-    clipPos_ = SIZE_MAX; // a stream that opens mid-clip does not join it
     watchAcquire();
     AcquireSRWLockExclusive(&gInstancesLock);
     gInstances.push_back(this);
@@ -537,27 +544,30 @@ class AuraApo final : public INonDelegatingUnknown,
   STDMETHODIMP_(UINT32) CalcOutputFrames(UINT32 inputFrames) override { return inputFrames; }
 
  private:
-  // Soundboard: add the current clip to what leaves the microphone (audio thread).
+  // Soundboard: add every playing clip to what leaves the microphone (audio thread).
   void mixClip(float* dst, UINT32 frames, UINT32 ch) {
-    const unsigned serial = gClipSerial.load(std::memory_order_acquire);
-    if (serial != clipSerial_) {
-      clipSerial_ = serial;
-      clipPos_ = 0;
-    }
     const unsigned stop = gLive.playStop.load(std::memory_order_relaxed);
-    if (stop != clipStop_) {
-      clipStop_ = stop;
-      clipPos_ = SIZE_MAX;
-    }
-    const Clip* clip = gClip.load(std::memory_order_acquire);
-    if (!clip || clipPos_ >= clip->samples.size()) return;
+    const bool cut = stop != clipStop_;
+    clipStop_ = stop;
     const float gain = gLive.clipGain.load(std::memory_order_relaxed);
-    const size_t n = std::min(size_t(frames), clip->samples.size() - clipPos_);
-    for (size_t i = 0; i < n; i++) {
-      const float v = clip->samples[clipPos_ + i] * gain;
-      for (UINT32 c = 0; c < ch; c++) dst[i * ch + c] = std::max(-1.0f, std::min(1.0f, dst[i * ch + c] + v));
+    for (int v = 0; v < kVoices; v++) {
+      const unsigned serial = gVoiceSerial[v].load(std::memory_order_acquire);
+      if (serial != voiceSerial_[v]) {
+        voiceSerial_[v] = serial;
+        voicePos_[v] = 0;
+      }
+      if (cut) voicePos_[v] = SIZE_MAX;
+      const Clip* clip = gVoice[v].load(std::memory_order_acquire);
+      if (!clip || voicePos_[v] >= clip->samples.size()) continue;
+      const size_t n = std::min(size_t(frames), clip->samples.size() - voicePos_[v]);
+      for (size_t i = 0; i < n; i++) {
+        const float s = clip->samples[voicePos_[v] + i] * gain;
+        for (UINT32 c = 0; c < ch; c++) dst[i * ch + c] += s;
+      }
+      voicePos_[v] += n;
     }
-    clipPos_ += n;
+    // Several sounds on top of a voice can overshoot: keep the sum inside full scale.
+    for (UINT32 i = 0; i < frames * ch; i++) dst[i] = std::max(-1.0f, std::min(1.0f, dst[i]));
   }
 
   void leave() {
@@ -633,8 +643,9 @@ class AuraApo final : public INonDelegatingUnknown,
   aura::DeepDenoiser deep_;
 #endif
   float sampleRate_ = 48000;
-  unsigned clipSerial_ = 0, clipStop_ = 0;
-  size_t clipPos_ = SIZE_MAX;
+  unsigned voiceSerial_[kVoices] = {};
+  size_t voicePos_[kVoices] = {SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX};
+  unsigned clipStop_ = 0;
   aura::Biquad kShelf_[2], kHigh_[2];
   float meanSquare_[2] = {0, 0};
   float loudnessCoef_ = 0;
