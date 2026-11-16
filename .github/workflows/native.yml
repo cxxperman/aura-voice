@@ -1,0 +1,24 @@
+name: native
+
+on:
+  push:
+    paths: ['native/**', '.github/workflows/native.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S native -B native/build -A x64
+      - name: Build
+        run: cmake --build native/build --config Release
+      - name: Test the voice chain
+        run: native/build/Release/dsp_test.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aura-native
+          path: |
+            native/build/Release/AuraAPO.dll
+            native/build/Release/AuraSetup.exe

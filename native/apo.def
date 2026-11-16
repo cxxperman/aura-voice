@@ -1,0 +1,4 @@
+LIBRARY AuraAPO
+EXPORTS
+  DllGetClassObject PRIVATE
+  DllCanUnloadNow   PRIVATE
