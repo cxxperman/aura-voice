@@ -42,7 +42,10 @@ const DEFAULTS = {
   custom: null,
   mute: false,
   nsEngine: 0, // 0 = fast (RNNoise), 1 = high quality (DeepFilterNet)
-  pads: [], // soundboard: [{ id: stored file name, name }]
+  pads: [], // soundboard: [{ id: stored file name, name, source?, key? }]
+  hotkeys: { power: 'Ctrl+Shift+F9', mute: 'Ctrl+Shift+F10' },
+  onboarded: false,
+  tuned: false,
   playId: 0,
   playStop: 0,
   clipGain: 70,
@@ -57,7 +60,7 @@ function loadState() {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY));
     const g = { ...DEFAULTS.g, ...saved?.g };
     if (saved?.ns === true && !saved.g) g.ns = 60; // older builds had an on/off switch
-    return { ...DEFAULTS, ...saved, g, v: { ...DEFAULTS.v, ...saved?.v } };
+    return { ...DEFAULTS, ...saved, g, v: { ...DEFAULTS.v, ...saved?.v }, hotkeys: { ...DEFAULTS.hotkeys, ...saved?.hotkeys } };
   } catch {
     return structuredClone(DEFAULTS);
   }
@@ -175,6 +178,15 @@ function renderSystem() {
   btn.disabled = alt.disabled = sysBusy;
   alt.hidden = true;
   btn.dataset.action = sys.installed && !sys.detached ? 'uninstall' : 'install';
+  // Picking another microphone in the list turns the button into "move the module there".
+  const select = $('#sysDevice');
+  const current = captureDevices.find((d) => d.current);
+  $('#sysDeviceRow').hidden = captureDevices.length === 0;
+  if (sys.installed && !sys.detached && !silent && current && select.value && select.value !== current.guid && !sysBusy) {
+    btn.textContent = 'Перенести сюда';
+    btn.dataset.action = 'install';
+  }
+  renderGuide();
 }
 
 async function runSetup(action) {
@@ -184,12 +196,13 @@ async function runSetup(action) {
   renderSystem();
   const wasOn = engine.running;
   if (wasOn) await engine.stop(); // the audio service is about to restart under us
-  const res = await window.auraSystem.setup(action === 'uninstall' ? 'uninstall' : 'install', action === 'unprotect');
+  const res = await window.auraSystem.setup(action === 'uninstall' ? 'uninstall' : 'install', action === 'unprotect', $('#sysDevice').value || null);
   sysMessage = res.cancelled ? 'Отменено — ничего не изменилось.' : res.lines.join(' ') || (res.ok ? '' : 'Установщик не ответил.');
   sysBusy = false;
   startFailed = false;
   await new Promise((r) => setTimeout(r, 1500)); // let the audio service come back
   await pollSystem();
+  await loadCaptureDevices();
   if (wasOn) await setPower(true);
   renderPower();
   setTimeout(() => {
@@ -539,31 +552,56 @@ sampleBtn.addEventListener('click', async () => {
  * microphone for every program) and plays the same thing to the user's own headphones. */
 const padsEl = $('#pads');
 let padContext = null;
-let padSource = null;
+const padSources = new Set(); // everything currently playing to the user's ears
 
+// The key shown on a pad: its own, or Ctrl+Alt+digit for the first nine.
+const padKey = (pad, index) => pad.key || (index < 9 ? `Ctrl+Alt+${index + 1}` : '');
+const shortKey = (accel) => accel.replace('Ctrl+', '⌃').replace('Alt+', '⌥').replace('Shift+', '⇧');
+
+let dragFrom = -1;
 function renderPads() {
   padsEl.replaceChildren(
-    ...state.pads.map((pad) => {
+    ...state.pads.map((pad, index) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'pad';
-      const index = state.pads.indexOf(pad);
-      if (index < 9) {
+      const accel = padKey(pad, index);
+      if (accel) {
         const key = document.createElement('kbd');
-        key.textContent = String(index + 1);
+        key.textContent = shortKey(accel);
+        key.classList.toggle('failed', hotkeyFailed.has(accel));
         b.append(key);
       }
       b.append(pad.name);
-      b.title = `${pad.name} — правый клик, чтобы убрать`;
+      b.title = `${pad.name}${accel ? ' · ' + accel : ''} — правый клик: имя, клавиша, удаление; перетащите, чтобы переставить`;
       b.addEventListener('click', () => playPad(pad));
       b.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-        if (!confirm(`Убрать звук «${pad.name}»?`)) return;
-        state.pads = state.pads.filter((p) => p !== pad);
-        window.auraSystem.removeSound(pad.id);
-        save();
-        renderPads();
-        renderCatalog();
+        openPadMenu(pad, e.clientX, e.clientY);
+      });
+      // Drag to reorder.
+      b.draggable = true;
+      b.addEventListener('dragstart', (e) => {
+        dragFrom = index;
+        e.dataTransfer.effectAllowed = 'move';
+        b.classList.add('dragging');
+      });
+      b.addEventListener('dragend', () => {
+        dragFrom = -1;
+        b.classList.remove('dragging');
+      });
+      b.addEventListener('dragover', (e) => {
+        if (dragFrom < 0 || dragFrom === index) return;
+        e.preventDefault();
+        b.classList.add('drop');
+      });
+      b.addEventListener('dragleave', () => b.classList.remove('drop'));
+      b.addEventListener('drop', (e) => {
+        e.preventDefault();
+        if (dragFrom < 0 || dragFrom === index) return;
+        const [moved] = state.pads.splice(dragFrom, 1);
+        state.pads.splice(index, 0, moved);
+        padsChanged();
       });
       return b;
     })
@@ -572,12 +610,92 @@ function renderPads() {
   // Warm the first pads up in the background, so even their first press is instant.
   for (const pad of state.pads.slice(0, 12)) padSamples(pad).catch(() => {});
 }
+function padsChanged() {
+  save();
+  renderPads();
+  renderCatalog();
+  syncHotkeys();
+}
+
+/* A small menu for one pad: rename, give it a key, remove it. */
+let padMenu = null;
+function closePadMenu() {
+  padMenu?.remove();
+  padMenu = null;
+  stopCapture();
+}
+function openPadMenu(pad, x, y) {
+  closePadMenu();
+  const menu = (padMenu = document.createElement('div'));
+  menu.className = 'menu';
+
+  const name = document.createElement('input');
+  name.type = 'text';
+  name.value = pad.name;
+  name.maxLength = 40;
+  name.setAttribute('aria-label', 'Название звука');
+  const rename = () => {
+    const value = name.value.trim();
+    if (value && value !== pad.name) {
+      pad.name = value;
+      padsChanged();
+    }
+  };
+  name.addEventListener('change', rename);
+  name.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      rename();
+      closePadMenu();
+    }
+  });
+
+  const key = document.createElement('button');
+  key.type = 'button';
+  const keyLabel = () => (key.textContent = `Клавиша: ${pad.key || padKey(pad, state.pads.indexOf(pad)) || 'нет'}`);
+  keyLabel();
+  key.addEventListener('click', () => {
+    key.textContent = 'Нажмите сочетание… (Esc — отмена, Backspace — убрать)';
+    captureHotkey((accel) => {
+      if (accel !== null) {
+        if (accel) delete state.pads.find((p) => p !== pad && p.key === accel)?.key; // a key belongs to one pad
+        if (accel) pad.key = accel;
+        else delete pad.key;
+        padsChanged();
+      }
+      keyLabel();
+    });
+  });
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'danger';
+  remove.textContent = 'Убрать звук';
+  remove.addEventListener('click', () => {
+    state.pads = state.pads.filter((p) => p !== pad);
+    padCache.delete(pad.id);
+    window.auraSystem.removeSound(pad.id);
+    closePadMenu();
+    padsChanged();
+  });
+
+  menu.append(name, key, remove);
+  document.body.append(menu);
+  const box = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, innerWidth - box.width - 12)}px`;
+  menu.style.top = `${Math.min(y, innerHeight - box.height - 12)}px`;
+  name.select();
+}
+addEventListener('pointerdown', (e) => {
+  if (padMenu && !padMenu.contains(e.target)) closePadMenu();
+});
 
 function stopLocalPad() {
-  try {
-    padSource?.stop();
-  } catch {}
-  padSource = null;
+  for (const source of padSources) {
+    try {
+      source.stop();
+    } catch {}
+  }
+  padSources.clear();
 }
 
 // Any audio file → mono 48 kHz, at most 20 s, normalised so every sound is equally loud.
@@ -597,8 +715,8 @@ async function decodeSound(bytes) {
 }
 
 // Play to the user's own ears only (headphones chosen in Settings). Returns the source node.
-async function playLocal(mono, onEnded) {
-  stopLocalPad();
+async function playLocal(mono, onEnded, exclusive = false) {
+  if (exclusive) stopLocalPad(); // previews replace each other; pads pile up, like on a real soundboard
   padContext ??= new AudioContext({ sampleRate: 48000 });
   await padContext.setSinkId(state.monitorId || '').catch(() => {});
   const buffer = padContext.createBuffer(1, mono.length, 48000);
@@ -609,11 +727,11 @@ async function playLocal(mono, onEnded) {
   source.buffer = buffer;
   source.connect(gain).connect(padContext.destination);
   source.onended = () => {
-    if (padSource === source) padSource = null;
+    padSources.delete(source);
     onEnded?.();
   };
   source.start();
-  padSource = source;
+  padSources.add(source);
   return source;
 }
 
@@ -651,8 +769,7 @@ $('#padAdd').addEventListener('click', async () => {
   const added = await window.auraSystem.addSounds();
   if (!added?.length) return;
   state.pads.push(...added);
-  save();
-  renderPads();
+  padsChanged();
 });
 $('#padStop').addEventListener('click', () => {
   state.playStop++;
@@ -671,6 +788,118 @@ $('#padStop').addEventListener('click', () => {
     pushSystem();
   });
 }
+
+/* ───────── Hotkeys ─────────
+ * Global shortcuts live in the main process; this side decides what they are. */
+let hotkeyFailed = new Set(); // combinations Windows refused (another program owns them)
+let capturing = null;
+
+function accelFromEvent(e) {
+  const c = e.code;
+  let key = null;
+  if (/^Key[A-Z]$/.test(c)) key = c[3];
+  else if (/^Digit\d$/.test(c)) key = c[5];
+  else if (/^F\d{1,2}$/.test(c)) key = c;
+  else if (/^Numpad\d$/.test(c)) key = 'num' + c[6];
+  else if (['Space', 'Home', 'End', 'PageUp', 'PageDown', 'Insert'].includes(c)) key = c;
+  else if (/^Arrow/.test(c)) key = c.slice(5);
+  if (!key) return null;
+  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean);
+  if (!mods.length && !/^F\d/.test(key)) return null; // a bare letter would hijack typing everywhere
+  return [...mods, key].join('+');
+}
+// done(accel): a combination, '' to clear, or null when cancelled.
+function captureHotkey(done) {
+  stopCapture();
+  capturing = done;
+}
+function stopCapture() {
+  const done = capturing;
+  capturing = null;
+  done?.(null);
+}
+addEventListener(
+  'keydown',
+  (e) => {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const done = capturing;
+    if (e.key === 'Escape') {
+      capturing = null;
+      return done(null);
+    }
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      capturing = null;
+      return done('');
+    }
+    const accel = accelFromEvent(e);
+    if (!accel) return; // still holding modifiers
+    capturing = null;
+    done(accel);
+  },
+  true
+);
+
+async function syncHotkeys() {
+  if (!window.auraSystem?.setHotkeys || TEST) return;
+  const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null) });
+  hotkeyFailed = new Set(failed || []);
+  renderHotkeys();
+  renderPads();
+}
+function renderHotkeys() {
+  for (const id of ['power', 'mute']) {
+    const accel = state.hotkeys[id];
+    const button = $(`#key-${id}`);
+    button.textContent = accel ? (hotkeyFailed.has(accel) ? `${accel} — занято другой программой` : accel) : 'Не задана';
+    button.classList.toggle('failed', hotkeyFailed.has(accel));
+  }
+  $('#muteKey').textContent = state.hotkeys.mute ? ` · ${state.hotkeys.mute}` : '';
+}
+for (const id of ['power', 'mute']) {
+  $(`#key-${id}`).addEventListener('click', (e) => {
+    e.currentTarget.textContent = 'Нажмите сочетание… (Esc — отмена, Backspace — убрать)';
+    captureHotkey((accel) => {
+      if (accel !== null) {
+        state.hotkeys[id] = accel;
+        save();
+        syncHotkeys();
+      } else {
+        renderHotkeys();
+      }
+    });
+  });
+}
+
+/* ───────── Microphone for the module ───────── */
+let captureDevices = [];
+async function loadCaptureDevices() {
+  if (!window.auraSystem?.captureDevices || TEST) return;
+  captureDevices = (await window.auraSystem.captureDevices()) || [];
+  const select = $('#sysDevice');
+  select.replaceChildren(...captureDevices.map((d) => new Option(d.name, d.guid)));
+  const current = captureDevices.find((d) => d.current);
+  if (current) select.value = current.guid;
+  renderSystem();
+}
+$('#sysDevice').addEventListener('change', () => renderSystem());
+
+/* ───────── First steps ───────── */
+function renderGuide() {
+  const guide = $('#guide');
+  guide.hidden = state.onboarded || TEST;
+  if (guide.hidden) return;
+  $('#guide1').classList.toggle('done', sys.installed);
+  $('#guide2').classList.toggle('done', state.tuned);
+  $('#guide3').classList.toggle('done', state.preset !== 'studio');
+}
+$('#guideClose').addEventListener('click', () => {
+  state.onboarded = true;
+  save();
+  renderGuide();
+});
+$('#guide1').addEventListener('click', () => showTab('setup'));
 
 /* ───────── Catalogue (UwUpad) ─────────
  * Browse and search the site's sounds without leaving the window: listen first (only you
@@ -733,9 +962,7 @@ function renderCatalog() {
           return flash('Не удалось скачать этот звук.', true);
         }
         state.pads.push(pad);
-        save();
-        renderPads();
-        renderCatalog();
+        padsChanged();
       });
       row.append(play, title, meta, add);
       return row;
@@ -767,7 +994,7 @@ async function previewSound(item) {
     if (!bytes) throw new Error('no data');
     const mono = await decodeSound(bytes);
     if (catalog.previewing !== item.id) return; // the user moved on while it was downloading
-    await playLocal(mono, done);
+    await playLocal(mono, done, true);
   } catch {
     done();
     flash('Не удалось проиграть этот звук.', true);
@@ -802,6 +1029,7 @@ function showTab(name) {
   try {
     localStorage.setItem('aura.tab', name);
   } catch {}
+  if (name === 'setup') loadCaptureDevices();
   if (name === 'sounds' && !catalog.started) {
     catalog.started = true; // nothing is fetched until the user actually opens the page
     loadCatalog(true);
@@ -873,6 +1101,9 @@ tuneBtn.addEventListener('click', async () => {
   const gainInput = $('#inGain');
   gainInput.value = gain;
   gainInput.dispatchEvent(new Event('input')); // updates the label, applies and saves
+  state.tuned = true;
+  save();
+  renderGuide();
   setStatus(`Настроено: фон ${Math.round(noise)} дБ, голос ${Math.round(speech)} дБ`);
   setTimeout(liveStatus, 6000);
 });
@@ -1043,6 +1274,9 @@ async function boot() {
     savedTab = new URLSearchParams(location.search).get('tab') || localStorage.getItem('aura.tab') || 'voice';
   } catch {}
   showTab(savedTab);
+  renderHotkeys();
+  renderGuide();
+  syncHotkeys();
   renderPreset();
   renderSliders();
   renderPower();

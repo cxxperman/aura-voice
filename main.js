@@ -16,6 +16,8 @@ const asset = (name) => path.join(__dirname, 'assets', name);
 
 // Let the audio engine start on launch, without waiting for a click.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Dev runs get a profile of their own: they must never read or overwrite the installed app's settings.
+if (devRun) app.setPath('userData', path.join(app.getPath('temp'), 'aura-dev-profile'));
 if (shotArg) app.disableHardwareAcceleration(); // dev screenshots: software rendering works with the display off
 
 if (!devRun && !app.requestSingleInstanceLock()) app.quit();
@@ -26,6 +28,7 @@ let quitting = false;
 let ui = { on: false, mute: false, system: false, preset: '', presetName: '', presets: [] }; // what the window last reported
 const HOTKEY_POWER = 'Ctrl+Shift+F9';
 const HOTKEY_MUTE = 'Ctrl+Shift+F10';
+let hotkeys = { power: HOTKEY_POWER, mute: HOTKEY_MUTE }; // what the window last asked for
 
 function createWindow() {
   win = new BrowserWindow({
@@ -242,6 +245,62 @@ ipcMain.handle('uwu:add', async (_e, item) => {
 });
 ipcMain.handle('uwu:open', () => shell.openExternal(UWU_SITE));
 
+/* ───── Hotkeys ─────
+ * The window owns the configuration and re-sends all of it on every change. */
+const accelOk = (a) => typeof a === 'string' && /^((Ctrl|Alt|Shift)\+){0,3}([A-Z0-9]|F\d{1,2}|num\d|Space|Up|Down|Left|Right|Home|End|PageUp|PageDown|Insert)$/.test(a);
+ipcMain.handle('hotkeys:set', (_e, config) => {
+  if (devRun) return [];
+  globalShortcut.unregisterAll();
+  const failed = [];
+  const used = new Set();
+  const bind = (accel, action) => {
+    if (!accelOk(accel) || used.has(accel)) return;
+    used.add(accel);
+    let ok = false;
+    try {
+      ok = globalShortcut.register(accel, action);
+    } catch {}
+    if (!ok) failed.push(accel); // some other program already owns this combination
+  };
+  hotkeys = { power: accelOk(config?.power) ? config.power : '', mute: accelOk(config?.mute) ? config.mute : '' };
+  bind(hotkeys.power, () => command('power'));
+  bind(hotkeys.mute, () => command('mute'));
+  const pads = Array.isArray(config?.pads) ? config.pads.slice(0, 200) : [];
+  pads.forEach((key, i) => key && bind(key, () => command('pad', i)));
+  // Pads without a key of their own: the first nine get Ctrl+Alt+digit.
+  pads.forEach((key, i) => !key && i < 9 && bind(`Ctrl+Alt+${i + 1}`, () => command('pad', i)));
+  refreshTray();
+  return failed;
+});
+
+/* ───── Microphones the module can live in ───── */
+ipcMain.handle('system:devices', () => {
+  const script = [
+    '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+    "$current = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Aura' -ErrorAction SilentlyContinue).Device",
+    "Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\Capture' | ForEach-Object {",
+    '  if ((Get-ItemProperty $_.PSPath).DeviceState -eq 1) {',
+    "    $p = Get-ItemProperty ($_.PSPath + '\\Properties')",
+    "    [pscustomobject]@{ guid = $_.PSChildName; name = ($p.'{a45c254e-df1c-4efd-8020-67d146a850e0},2' + ' — ' + $p.'{b3f8fa53-0004-438e-9003-51a46e139bfc},6'); current = ($_.PSChildName -eq $current) }",
+    '  }',
+    '} | ConvertTo-Json -Compress',
+  ].join('\n');
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, encoding: 'utf8' }, (err, out) => {
+      try {
+        const parsed = JSON.parse(String(out).trim() || '[]');
+        resolve(
+          (Array.isArray(parsed) ? parsed : [parsed])
+            .filter((d) => /^\{[0-9a-fA-F-]{36}\}$/.test(d.guid))
+            .map((d) => ({ guid: d.guid, name: String(d.name).slice(0, 90), current: !!d.current }))
+        );
+      } catch {
+        resolve([]);
+      }
+    });
+  });
+});
+
 /* ───── Preset files ───── */
 const presetFilter = [{ name: 'Пресет Aura', extensions: ['json'] }];
 ipcMain.handle('preset:export', async (_e, preset) => {
@@ -282,8 +341,8 @@ function refreshTray() {
     Menu.buildFromTemplate([
       { label: 'Открыть Aura', click: showWindow },
       { type: 'separator' },
-      { label: 'Обработка голоса', type: 'checkbox', checked: ui.on, accelerator: HOTKEY_POWER, registerAccelerator: false, click: () => command('power') },
-      { label: 'Заглушить микрофон', type: 'checkbox', checked: ui.mute, enabled: ui.system, accelerator: HOTKEY_MUTE, registerAccelerator: false, click: () => command('mute') },
+      { label: 'Обработка голоса', type: 'checkbox', checked: ui.on, accelerator: hotkeys.power || undefined, registerAccelerator: false, click: () => command('power') },
+      { label: 'Заглушить микрофон', type: 'checkbox', checked: ui.mute, enabled: ui.system, accelerator: hotkeys.mute || undefined, registerAccelerator: false, click: () => command('mute') },
       {
         label: 'Характер',
         enabled: ui.presets.length > 0,
@@ -385,6 +444,7 @@ ipcMain.handle('system:status', () => {
 });
 
 ipcMain.handle('system:write', (_e, text) => {
+  if (devRun && !probeMode) return false; // a screenshot run must not change what the live module is doing
   if (typeof text !== 'string' || text.length > 2000) return false;
   try {
     // Write-then-rename, so the module never reads a half-written file.
@@ -397,12 +457,13 @@ ipcMain.handle('system:write', (_e, text) => {
   }
 });
 
-ipcMain.handle('system:setup', (_e, action, unprotect) => {
+ipcMain.handle('system:setup', (_e, action, unprotect, device) => {
   if (action !== 'install' && action !== 'uninstall') return { ok: false, lines: [] };
   const log = path.join(dataDir, 'setup.log');
   try { fs.rmSync(log, { force: true }); } catch {}
   const quote = (v) => `'${v.replace(/'/g, "''")}'`;
-  const args = action === 'install' && unprotect ? "'install','--unprotect'" : quote(action);
+  const guid = typeof device === 'string' && /^\{[0-9a-fA-F-]{36}\}$/.test(device) ? device : null;
+  const args = action === 'install' ? ["'install'", ...(unprotect ? ["'--unprotect'"] : []), ...(guid ? ["'--device'", quote(guid)] : [])].join(',') : quote(action);
   const command = `Start-Process -FilePath ${quote(path.join(binDir, 'AuraSetup.exe'))} -ArgumentList ${args} -Verb RunAs -Wait -WindowStyle Hidden`;
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true }, (err) => {

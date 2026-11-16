@@ -19,7 +19,9 @@ contextBridge.exposeInMainWorld('auraSystem', {
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
   importPreset: () => ipcRenderer.invoke('preset:import'),
   write: (text) => ipcRenderer.invoke('system:write', text),
-  setup: (action, unprotect) => ipcRenderer.invoke('system:setup', action, !!unprotect),
+  setup: (action, unprotect, device) => ipcRenderer.invoke('system:setup', action, !!unprotect, device),
+  captureDevices: () => ipcRenderer.invoke('system:devices'),
+  setHotkeys: (config) => ipcRenderer.invoke('hotkeys:set', config),
   // Tray menu <-> window
   report: (state) => ipcRenderer.send('ui:state', state),
   onCommand: (handler) => ipcRenderer.on('tray:command', (_e, name, arg) => handler(name, arg)),
