@@ -3,6 +3,7 @@
 // Every program that records from that microphone receives the processed voice.
 
 #include "aura_shared.h"
+#include "aura_denoise.h"
 
 #include <mmreg.h>
 #include <ks.h>
@@ -22,6 +23,7 @@ std::atomic<long> gObjects{0};
 
 struct Live {
   std::atomic<bool> enabled{true};
+  std::atomic<bool> noiseSuppression{false};
   std::atomic<float> v[11];
   std::atomic<int> sampleRate{0}, channels{0};
   std::atomic<unsigned> blocks{0};
@@ -33,6 +35,7 @@ void store(const aura::Settings& s) {
                             p.clean, p.deess, p.autoLevel, p.inGainDb, p.outGainDb};
   for (int i = 0; i < 11; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
   gLive.enabled.store(s.enabled, std::memory_order_relaxed);
+  gLive.noiseSuppression.store(s.noiseSuppression, std::memory_order_relaxed);
 }
 
 aura::Settings load() {
@@ -42,6 +45,7 @@ aura::Settings load() {
                        &p.clean, &p.deess, &p.autoLevel, &p.inGainDb, &p.outGainDb};
   for (int i = 0; i < 11; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
   s.enabled = gLive.enabled.load(std::memory_order_relaxed);
+  s.noiseSuppression = gLive.noiseSuppression.load(std::memory_order_relaxed);
   return s;
 }
 
@@ -61,8 +65,9 @@ bool readSettings(const std::wstring& path) {
 
 void writeStatus(const std::wstring& path) {
   char text[160];
-  const int len = wsprintfA(text, "alive=1\r\nsr=%d\r\nch=%d\r\nblocks=%u\r\nenabled=%d\r\n", gLive.sampleRate.load(),
-                            gLive.channels.load(), gLive.blocks.load(), gLive.enabled.load() ? 1 : 0);
+  const int len = wsprintfA(text, "alive=1\r\nsr=%d\r\nch=%d\r\nblocks=%u\r\nenabled=%d\r\nns=%d\r\n", gLive.sampleRate.load(),
+                            gLive.channels.load(), gLive.blocks.load(), gLive.enabled.load() ? 1 : 0,
+                            gLive.noiseSuppression.load() ? 1 : 0);
   const HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
   if (f == INVALID_HANDLE_VALUE) return;
@@ -233,6 +238,7 @@ class AuraApo final : public INonDelegatingUnknown,
       right_.assign(capacity_, 0.0f);
       chain_ = aura::Chain();
       chain_.prepare(f.fFramesPerSecond);
+      denoise_.prepare(f.fFramesPerSecond); // stays off at other sample rates
     } catch (const std::bad_alloc&) {
       return E_OUTOFMEMORY;
     }
@@ -275,6 +281,7 @@ class AuraApo final : public INonDelegatingUnknown,
       for (UINT32 c = 0; c < ch; c++) sum += src[i * ch + c];
       mono_[i] = sum / float(ch);
     }
+    if (s.noiseSuppression && denoise_.ready()) denoise_.process(mono_.data(), int(frames), 1.0f);
     chain_.setParams(s.params);
     chain_.process(mono_.data(), left_.data(), right_.data(), int(frames));
 
@@ -329,6 +336,7 @@ class AuraApo final : public INonDelegatingUnknown,
   UINT32 capacity_ = 0;
   float mix_ = 1.0f;
   aura::Chain chain_;
+  aura::Denoiser denoise_;
   std::vector<float> mono_, left_, right_;
 };
 

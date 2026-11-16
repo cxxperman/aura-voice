@@ -1,5 +1,6 @@
 // Offline check of the voice chain: feeds it a synthetic "voice" and makes sure the result is sane.
 #include "aura_shared.h"
+#include "aura_denoise.h"
 
 #include <chrono>
 #include <cstdio>
@@ -77,7 +78,37 @@ static void run(const char* name, float sr, const aura::Params& p, bool expectGa
   if (expectGate) CHECK(quietOut < quietIn - 6.0f, "pauses are not quieter (%.1f dB vs %.1f dB)", quietOut, quietIn);
 }
 
+// Voice in a loud fan-like hiss (-41 dB RMS): the pauses must come out much cleaner, the voice must survive.
+static void runDenoiser() {
+  std::vector<float> x = voice(48000);
+  unsigned seed = 777;
+  for (auto& s : x) {
+    seed = seed * 1664525u + 1013904223u;
+    s += (float(seed >> 8) / 8388608.0f - 1.0f) * 0.015f;
+  }
+  const std::vector<float> in = x;
+  aura::Denoiser d;
+  CHECK(d.prepare(48000), "denoiser did not start at 48 kHz");
+  CHECK(!aura::Denoiser().prepare(44100), "denoiser must refuse 44.1 kHz");
+  const auto t0 = std::chrono::steady_clock::now();
+  for (size_t at = 0; at < x.size(); at += 441) d.process(x.data() + at, int(std::min<size_t>(441, x.size() - at)), 1.0f);
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+
+  bool finite = true;
+  for (float s : x) finite = finite && std::isfinite(s);
+  const size_t a = size_t(0.7f * 48000), b = size_t(1.9f * 48000), tail = size_t(2.5f * 48000);
+  const float speechIn = rmsDb(in, a, b), speechOut = rmsDb(x, a, b);
+  const float quietIn = rmsDb(in, tail, in.size()), quietOut = rmsDb(x, tail, in.size());
+  std::printf("%-22s sr=48000  speech %6.1f -> %6.1f dB | pause %6.1f -> %6.1f dB | %.1f%% of realtime\n", "noise suppression",
+              speechIn, speechOut, quietIn, quietOut, ms / 3000.0 * 100.0);
+  CHECK(finite, "denoiser output contains NaN or infinity");
+  CHECK(quietOut < quietIn - 10.0f, "noise in pauses only dropped by %.1f dB", quietIn - quietOut);
+  CHECK(speechOut > speechIn - 9.0f, "denoiser ate the voice (%.1f dB)", speechOut - speechIn);
+  CHECK(ms < 600.0, "denoiser too slow: %.0f ms for 3 s", ms);
+}
+
 int main() {
+  runDenoiser();
   aura::Params def;
   aura::Params zero = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   aura::Params max = {1, 1, 1, 1, 1, 1, 1, 1, 1, 12, 0};

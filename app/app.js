@@ -78,6 +78,7 @@ function pushSystem() {
       `enabled=${enabled ? 1 : 0}`,
       ...Object.keys(v).map((k) => `${k}=${v[k]}`),
       `auto=${state.auto ? 1 : 0}`,
+      `ns=${state.ns ? 1 : 0}`,
       `ingain=${state.inGain}`,
       `outgain=${state.outGain}`,
     ].join('\r\n') + '\r\n'
@@ -100,7 +101,7 @@ async function pollSystem() {
   const before = sys.installed;
   sys = await window.auraSystem.status();
   if (sys.installed !== before) {
-    for (const id of ['ns', 'outputId']) $(`#${id}`).disabled = sys.installed;
+    $('#outputId').disabled = sys.installed;
     if (engine.running) await restartEngine();
     pushSystem();
     renderRoute();
@@ -180,7 +181,7 @@ function liveStatus() {
   if (engine.sampleMode) return setStatus('Играет проба — настраивайте звук');
   const c = engine.ctx;
   // +12 ms: look-ahead of the compressor and the limiter.
-  if (sys.installed) return setStatus(sys.alive ? 'В эфире · встроено в микрофон, без задержки' : 'В эфире · жду ответа модуля…');
+  if (sys.installed) return setStatus(sys.alive ? `В эфире · встроено в микрофон, ${state.ns ? 'задержка 10 мс' : 'без задержки'}` : 'В эфире · жду ответа модуля…');
   const ms = Math.round((c.baseLatency + (c.outputLatency || 0)) * 1000 + 12);
   setStatus(`В эфире · задержка около ${ms} мс`);
 }
@@ -324,7 +325,8 @@ for (const id of ['auto', 'ns', 'monitor']) {
     save();
     applyAll();
     // Noise suppression is a property of the capture itself — the microphone must be reopened.
-    if (id === 'ns' && engine.running && !TEST) await engine.openMic(state).catch(() => {});
+    if (id === 'ns' && engine.running && !TEST && !sys.installed) await engine.openMic(state).catch(() => {});
+    if (id === 'ns') liveStatus();
   });
 }
 

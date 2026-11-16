@@ -96,6 +96,7 @@ class Engine {
   // `system`: the voice is already processed inside the microphone by the APO module,
   // so nothing is sent to a virtual cable — the graph only meters and monitors.
   async start(state, { test = false, system = false } = {}) {
+    this.system = system;
     const c = (this.ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 }));
     const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
     await c.audioWorklet.addModule(url);
@@ -327,7 +328,8 @@ class Engine {
         deviceId: id ? { exact: id } : undefined,
         echoCancellation: false,
         autoGainControl: false,
-        noiseSuppression: !!state.ns,
+        // In system mode the module's own neural denoiser does this for every program.
+        noiseSuppression: !!state.ns && !this.system,
         channelCount: 1,
       },
     });

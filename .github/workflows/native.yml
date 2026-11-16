@@ -12,7 +12,7 @@ jobs:
 
       # The system module (APO) and its installer helper
       - name: Configure native
-        run: cmake -S native -B native/build -A x64
+        run: cmake -S native -B native/build -A x64 -T ClangCL
       - name: Build native
         run: cmake --build native/build --config Release
       - name: Test the voice chain
@@ -21,7 +21,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p native/bin
-          cp native/build/Release/AuraAPO.dll native/build/Release/AuraSetup.exe native/bin/
+          cp native/build/Release/AuraAPO.dll native/build/Release/AuraSetup.exe native/build/RNNoise-LICENSE.txt native/bin/
       - uses: actions/upload-artifact@v4
         with:
           name: aura-native
