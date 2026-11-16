@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; media-src 'self' blob: mediastream:; img-src 'self' data:">
+  <title>Aura</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
+  <header class="titlebar"><span>Aura</span></header>
+
+  <main>
+    <section class="hero">
+      <button class="orb" id="power" aria-pressed="false" aria-label="Включить обработку голоса">
+        <canvas id="orb" aria-hidden="true"></canvas>
+        <svg class="orb-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3v8" /><path d="M6.6 6.8a7.5 7.5 0 1 0 10.8 0" />
+        </svg>
+      </button>
+
+      <h1 id="presetTitle">Студия</h1>
+      <p class="status" id="status" role="status">Нажмите на сферу, чтобы включить</p>
+
+      <div class="meters">
+        <div class="meter"><span>Вход</span><div class="bar"><i id="mIn"></i></div><b id="mInDb">—</b></div>
+        <div class="meter"><span>Выход</span><div class="bar"><i id="mOut"></i></div><b id="mOutDb">—</b></div>
+        <div class="meter"><span>Сжатие</span><div class="bar gr"><i id="mGr"></i></div><b id="mGrDb">—</b></div>
+      </div>
+
+      <div class="actions">
+        <button class="pill" id="compare" disabled>Оригинал</button>
+        <button class="pill" id="sample" disabled>Записать пробу</button>
+      </div>
+      <p class="hint" id="actionHint">Удерживайте «Оригинал», чтобы сравнить. «Проба» запишет 6 секунд вашего голоса и будет крутить их по кругу, пока вы настраиваете звук.</p>
+    </section>
+
+    <section class="controls">
+      <div class="presets" id="presets" role="radiogroup" aria-label="Характер голоса"></div>
+
+      <div class="card sliders" id="sliders"></div>
+
+      <div class="card toggles">
+        <label class="switch"><span><b>Авто-уровень</b><small>Выравнивает громкость, вытягивает тихий микрофон</small></span><input type="checkbox" id="auto"><i></i></label>
+        <label class="switch"><span><b>Шумоподавление</b><small>Убирает фон: вентилятор, клавиатуру</small></span><input type="checkbox" id="ns"><i></i></label>
+        <label class="switch"><span><b>Слышать себя</b><small>Только в наушниках, иначе будет эхо</small></span><input type="checkbox" id="monitor"><i></i></label>
+      </div>
+
+      <div class="card devices">
+        <label class="field"><span>Микрофон</span><select id="inputId"></select></label>
+        <label class="field"><span>Выход в приложения</span><select id="outputId"></select></label>
+        <label class="field"><span>Наушники</span><select id="monitorId"></select></label>
+        <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
+        <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
+        <p class="route" id="route"></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

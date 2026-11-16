@@ -1,0 +1,13 @@
+{
+  "name": "aura-voice",
+  "productName": "Aura",
+  "version": "0.1.0",
+  "description": "Студийная обработка голоса с микрофона в реальном времени",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^45.3.2"
+  }
+}
