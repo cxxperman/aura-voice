@@ -486,7 +486,9 @@ function frame(now) {
     if (text) lastText = now;
     setMeter(meterEls.in, inFrac, text ? dbLabel(m.in) : meterEls.in[1].textContent);
     setMeter(meterEls.out, outFrac, text ? dbLabel(m.out) : meterEls.out[1].textContent);
-    setMeter(meterEls.gr, grFrac, text ? `${m.reduction.toFixed(1)} дБ` : meterEls.gr[1].textContent);
+    // In system mode the compressor runs inside the microphone, out of this window's sight.
+    if (sys.installed && !engine.sampleMode) setMeter(meterEls.gr, 0, '—');
+    else setMeter(meterEls.gr, grFrac, text ? `${m.reduction.toFixed(1)} дБ` : meterEls.gr[1].textContent);
   } else if (meterEls.in[1].textContent !== '—') {
     for (const k of Object.values(meterEls)) setMeter(k, 0, '—');
   }
