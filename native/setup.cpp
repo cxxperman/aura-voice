@@ -249,6 +249,10 @@ int install(std::wstring guid, bool unprotect) {
     audioService(true);
     return 1;
   }
+  // The high-quality noise-suppression model travels with the module when the installer has it.
+  const std::wstring model = L"\\DeepFilterNet3_onnx.tar.gz";
+  if (GetFileAttributesW((exeDir() + model).c_str()) != INVALID_FILE_ATTRIBUTES) CopyFileW((exeDir() + model).c_str(), (dir + model).c_str(), FALSE);
+  DeleteFileW((aura::dataDir() + L"\\deep.loading").c_str()); // a fresh module gets a fresh chance
 
   bool ok = true;
   const std::wstring clsid = aura::kClsidString;
@@ -351,6 +355,7 @@ int uninstall() {
   RegDeleteTreeW(HKEY_LOCAL_MACHINE, (kClsidRoot + clsid).c_str());
   RegDeleteTreeW(HKEY_LOCAL_MACHINE, kAuraKey);
   DeleteFileW((dir + L"\\AuraAPO.dll").c_str());
+  DeleteFileW((dir + L"\\DeepFilterNet3_onnx.tar.gz").c_str());
   RemoveDirectoryW(dir.c_str());
   DeleteFileW((aura::dataDir() + L"\\status.txt").c_str());
   audioService(true);

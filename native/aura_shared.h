@@ -31,6 +31,7 @@ struct Settings {
   bool enabled = true;
   bool mute = false;      // hard mute of the microphone, wins over everything
   float nsStrength = 0;   // neural noise suppression, 0 = off .. 1 = maximum
+  int nsEngine = 0;       // 0 = RNNoise (fast), 1 = DeepFilterNet (high quality, +30 ms)
   float dereverb = 0;     // room-echo reduction, 0 = off .. 1 = maximum
   Params params;
 };
@@ -56,6 +57,7 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
     if (key == "enabled") s.enabled = v > 0.5;
     else if (key == "mute") s.mute = v > 0.5;
     else if (key == "ns") s.nsStrength = clamp(v / 100, 0, 1);
+    else if (key == "nsengine") s.nsEngine = v > 0.5 ? 1 : 0;
     else if (key == "pop") s.params.pop = clamp(v / 100, 0, 1);
     else if (key == "pitch") s.params.pitch = clamp(v, -12, 12);
     else if (key == "dereverb") s.dereverb = clamp(v / 100, 0, 1);

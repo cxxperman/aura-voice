@@ -5,6 +5,9 @@
 #include "aura_shared.h"
 #include "aura_denoise.h"
 #include "aura_dereverb.h"
+#ifdef AURA_HAVE_DFN
+#include "aura_dfn.h"
+#endif
 
 #include <mmreg.h>
 #include <ks.h>
@@ -28,6 +31,11 @@ constexpr int kValues = 15;
 struct Live {
   std::atomic<bool> enabled{true};
   std::atomic<bool> mute{false};
+  std::atomic<int> nsEngine{0};
+  // DeepFilterNet: 0 = not available, 1 = available, -1 = switched off because loading it crashed last time.
+  std::atomic<int> deepState{0};
+  std::atomic<int> deepActive{0};
+  std::atomic<unsigned> deepFrames{0};
   std::atomic<float> v[kValues];
   std::atomic<int> sampleRate{0}, channels{0};
   std::atomic<unsigned> blocks{0};
@@ -48,6 +56,7 @@ void store(const aura::Settings& s) {
   for (int i = 0; i < kValues; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
   gLive.enabled.store(s.enabled, std::memory_order_relaxed);
   gLive.mute.store(s.mute, std::memory_order_relaxed);
+  gLive.nsEngine.store(s.nsEngine, std::memory_order_relaxed);
 }
 
 aura::Settings load() {
@@ -59,6 +68,7 @@ aura::Settings load() {
   for (int i = 0; i < kValues; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
   s.enabled = gLive.enabled.load(std::memory_order_relaxed);
   s.mute = gLive.mute.load(std::memory_order_relaxed);
+  s.nsEngine = gLive.nsEngine.load(std::memory_order_relaxed);
   return s;
 }
 
@@ -80,10 +90,11 @@ void writeStatus(const std::wstring& path) {
   auto db = [](float peak) { return 20.0 * std::log10(double(peak) + 1e-6); };
   char text[256];
   const int len = std::snprintf(
-      text, sizeof(text), "alive=1\r\nsr=%d\r\nch=%d\r\nblocks=%u\r\nenabled=%d\r\nmute=%d\r\nin=%.1f\r\nout=%.1f\r\ngr=%.1f\r\nvoice=%.2f\r\nlufs=%.1f\r\n",
+      text, sizeof(text), "alive=1\r\nsr=%d\r\nch=%d\r\nblocks=%u\r\nenabled=%d\r\nmute=%d\r\nin=%.1f\r\nout=%.1f\r\ngr=%.1f\r\nvoice=%.2f\r\nlufs=%.1f\r\ndeep=%d\r\nengine=%d\r\n",
       gLive.sampleRate.load(), gLive.channels.load(), gLive.blocks.load(), gLive.enabled.load() ? 1 : 0,
       gLive.mute.load() ? 1 : 0, db(gLive.peakIn.exchange(0)), db(gLive.peakOut.exchange(0)),
-      -double(gLive.reduction.exchange(0)), double(gLive.voice.exchange(0)), double(gLive.loudness.load()));
+      -double(gLive.reduction.exchange(0)), double(gLive.voice.exchange(0)), double(gLive.loudness.load()), gLive.deepState.load(),
+      gLive.deepActive.load());
   const HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
   if (f == INVALID_HANDLE_VALUE) return;
@@ -98,6 +109,62 @@ long gWatchUsers = 0;
 HANDLE gWatchThread = nullptr;
 HANDLE gWatchStop = nullptr;
 
+// ───── DeepFilterNet loading ─────
+// The model takes ~250 ms to load, so it is loaded here — by LockForProcess or by the watcher
+// thread — and handed to the audio thread through an atomic pointer.
+//
+// The library aborts the whole process if it cannot digest its model. To make sure that can
+// never take the audio engine down twice, a marker file is left before the first load and
+// removed once real audio has gone through; finding a stale marker means "it crashed last
+// time", and the deep engine then stays off until the user picks it again in the window.
+HINSTANCE gModule = nullptr;
+class AuraApo;
+SRWLOCK gInstancesLock = SRWLOCK_INIT;
+std::vector<AuraApo*> gInstances;
+void loadDeepEverywhere(); // defined after the class
+
+#ifdef AURA_HAVE_DFN
+SRWLOCK gDeepLock = SRWLOCK_INIT;
+bool gMarkerOurs = false, gDeepProven = false; // guarded by gDeepLock
+
+std::wstring deepModelPath() {
+  wchar_t buf[MAX_PATH];
+  GetModuleFileNameW(gModule, buf, MAX_PATH);
+  const std::wstring path(buf);
+  return path.substr(0, path.find_last_of(L'\\')) + L"\\DeepFilterNet3_onnx.tar.gz";
+}
+std::wstring deepMarkerPath() { return aura::dataDir() + L"\\deep.loading"; }
+bool exists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+// Refreshes gLive.deepState; with `claim`, also leaves the marker so a load may start.
+bool deepAllowed(bool claim) {
+  AcquireSRWLockExclusive(&gDeepLock);
+  int state = 1;
+  if (!exists(deepModelPath())) state = 0;
+  else if (!gDeepProven && !gMarkerOurs) {
+    if (exists(deepMarkerPath())) state = -1;
+    else if (claim) {
+      const HANDLE f = CreateFileW(deepMarkerPath().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+      gMarkerOurs = true;
+    }
+  }
+  gLive.deepState.store(state);
+  ReleaseSRWLockExclusive(&gDeepLock);
+  return state == 1;
+}
+
+void deepHousekeeping() {
+  AcquireSRWLockExclusive(&gDeepLock);
+  if (gMarkerOurs && gLive.deepFrames.load() > 300) { // three seconds of real audio went through: it works
+    DeleteFileW(deepMarkerPath().c_str());
+    gMarkerOurs = false;
+    gDeepProven = true;
+  }
+  ReleaseSRWLockExclusive(&gDeepLock);
+}
+#endif
+
 DWORD WINAPI watch(void*) {
   const std::wstring settings = aura::dataDir() + L"\\settings.txt";
   const std::wstring status = aura::dataDir() + L"\\status.txt";
@@ -108,6 +175,13 @@ DWORD WINAPI watch(void*) {
         CompareFileTime(&info.ftLastWriteTime, &seen) != 0 && readSettings(settings)) {
       seen = info.ftLastWriteTime;
     }
+#ifdef AURA_HAVE_DFN
+    if (tick % 8 == 0) {
+      deepAllowed(false);
+      deepHousekeeping();
+      if (gLive.nsEngine.load() == 1) loadDeepEverywhere(); // the user switched engines while a stream is open
+    }
+#endif
     writeStatus(status); // every 120 ms: it doubles as the level meter feed
     if (WaitForSingleObject(gWatchStop, 120) == WAIT_OBJECT_0) break;
   }
@@ -167,8 +241,17 @@ class AuraApo final : public INonDelegatingUnknown,
     gObjects++;
   }
   ~AuraApo() {
-    if (locked_) watchRelease();
+    if (locked_) leave();
     gObjects--;
+  }
+
+  // Loader side only (LockForProcess or the watcher thread) — never the audio thread.
+  void loadDeep() {
+#ifdef AURA_HAVE_DFN
+    if (deep_.ready() || sampleRate_ != 48000.0f || !deepAllowed(true)) return;
+    char utf8[MAX_PATH * 3];
+    if (WideCharToMultiByte(CP_UTF8, 0, deepModelPath().c_str(), -1, utf8, sizeof(utf8), nullptr, nullptr) > 0) deep_.load(utf8, sampleRate_);
+#endif
   }
 
   // Private IUnknown: the real reference count and interface table.
@@ -270,7 +353,12 @@ class AuraApo final : public INonDelegatingUnknown,
     }
     gLive.sampleRate = int(f.fFramesPerSecond);
     gLive.channels = int(channels_);
+    sampleRate_ = f.fFramesPerSecond;
     watchAcquire();
+    AcquireSRWLockExclusive(&gInstancesLock);
+    gInstances.push_back(this);
+    ReleaseSRWLockExclusive(&gInstancesLock);
+    if (gLive.nsEngine.load() == 1) loadDeep(); // have it ready for the very first buffer
     mix_ = gLive.enabled.load() ? 1.0f : 0.0f;
     locked_ = true;
     return S_OK;
@@ -278,7 +366,7 @@ class AuraApo final : public INonDelegatingUnknown,
   STDMETHODIMP UnlockForProcess() override {
     if (!locked_) return APOERR_ALREADY_UNLOCKED;
     locked_ = false;
-    watchRelease();
+    leave();
     return S_OK;
   }
 
@@ -314,9 +402,21 @@ class AuraApo final : public INonDelegatingUnknown,
       for (UINT32 c = 0; c < ch; c++) sum += src[i * ch + c];
       mono_[i] = sum / float(ch);
     }
-    if (s.nsStrength > 0.005f && denoise_.ready()) {
-      denoise_.process(mono_.data(), int(frames), aura::denoiseAmount(s.nsStrength), aura::denoiseGateFloor(s.nsStrength));
-      raise(gLive.voice, denoise_.voiceProbability());
+    if (s.nsStrength > 0.005f) {
+      bool deep = false;
+#ifdef AURA_HAVE_DFN
+      if (s.nsEngine == 1 && deep_.ready()) {
+        deep_.process(mono_.data(), int(frames), s.nsStrength);
+        gLive.deepFrames.fetch_add(1, std::memory_order_relaxed);
+        deep = true;
+      }
+#endif
+      // RNNoise is the fallback whenever the deep engine is not (yet) loaded.
+      if (!deep && denoise_.ready()) {
+        denoise_.process(mono_.data(), int(frames), aura::denoiseAmount(s.nsStrength), aura::denoiseGateFloor(s.nsStrength));
+        raise(gLive.voice, denoise_.voiceProbability());
+      }
+      gLive.deepActive.store(deep ? 1 : 0, std::memory_order_relaxed);
     }
     if (s.dereverb > 0.005f) dereverb_.process(mono_.data(), int(frames), s.dereverb);
     chain_.setParams(s.params);
@@ -347,6 +447,13 @@ class AuraApo final : public INonDelegatingUnknown,
   STDMETHODIMP_(UINT32) CalcOutputFrames(UINT32 inputFrames) override { return inputFrames; }
 
  private:
+  void leave() {
+    AcquireSRWLockExclusive(&gInstancesLock);
+    gInstances.erase(std::remove(gInstances.begin(), gInstances.end(), this), gInstances.end());
+    ReleaseSRWLockExclusive(&gInstancesLock);
+    watchRelease();
+  }
+
   void measureLoudness(const float* samples, UINT32 frames, UINT32 ch) {
     const UINT32 used = ch < 2 ? 1 : 2;
     for (UINT32 i = 0; i < frames; i++) {
@@ -409,6 +516,10 @@ class AuraApo final : public INonDelegatingUnknown,
   aura::Chain chain_;
   aura::Denoiser denoise_;
   aura::Dereverb dereverb_;
+#ifdef AURA_HAVE_DFN
+  aura::DeepDenoiser deep_;
+#endif
+  float sampleRate_ = 48000;
   aura::Biquad kShelf_[2], kHigh_[2];
   float meanSquare_[2] = {0, 0};
   float loudnessCoef_ = 0;
@@ -446,6 +557,12 @@ class Factory final : public IClassFactory {
 
 Factory gFactory;
 
+void loadDeepEverywhere() {
+  AcquireSRWLockShared(&gInstancesLock);
+  for (AuraApo* apo : gInstances) apo->loadDeep();
+  ReleaseSRWLockShared(&gInstancesLock);
+}
+
 } // namespace
 
 STDAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void** out) {
@@ -458,6 +575,9 @@ STDAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void** out) {
 STDAPI DllCanUnloadNow() { return gObjects.load() == 0 ? S_OK : S_FALSE; }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*) {
-  if (reason == DLL_PROCESS_ATTACH) DisableThreadLibraryCalls(instance);
+  if (reason == DLL_PROCESS_ATTACH) {
+    gModule = instance;
+    DisableThreadLibraryCalls(instance);
+  }
   return TRUE;
 }

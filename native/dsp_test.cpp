@@ -2,6 +2,9 @@
 #include "aura_shared.h"
 #include "aura_denoise.h"
 #include "aura_dereverb.h"
+#ifdef AURA_HAVE_DFN
+#include "aura_dfn.h"
+#endif
 
 #include <chrono>
 #include <cstdio>
@@ -206,7 +209,47 @@ static void runDereverb() {
   CHECK(err < ref * 1e-4, "dereverb at strength 0 is not transparent (error %.1f dB)", 10.0 * std::log10(err / ref + 1e-12));
 }
 
-int main() {
+#ifdef AURA_HAVE_DFN
+// Same hiss as for RNNoise, through DeepFilterNet: it must be far cleaner and still fit a 10 ms callback.
+static void runDeep(const char* model) {
+  std::vector<float> x(size_t(48000) * 9);
+  const std::vector<float> one = voice(48000);
+  unsigned seed = 777;
+  for (size_t i = 0; i < x.size(); i++) {
+    seed = seed * 1664525u + 1013904223u;
+    x[i] = one[i % one.size()] + (float(seed >> 8) / 8388608.0f - 1.0f) * 0.015f;
+  }
+  const std::vector<float> in = x;
+  aura::DeepDenoiser d;
+  CHECK(d.load(model, 48000), "DeepFilterNet did not load");
+  double worst = 0;
+  for (size_t at = 0; at + 480 <= x.size(); at += 480) {
+    const auto t0 = std::chrono::steady_clock::now();
+    d.process(x.data() + at, 480, 1.0f);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (at > 48000) worst = std::max(worst, ms);
+  }
+  bool finite = true;
+  for (float s : x) finite = finite && std::isfinite(s);
+  const size_t base = size_t(6) * 48000, lag = 480 * 3;
+  const float speechIn = rmsDb(in, base + 33600, base + 91200), speechOut = rmsDb(x, base + 33600 + lag, base + 91200 + lag);
+  const float quietIn = rmsDb(in, base + 120000, base + 144000 - lag), quietOut = rmsDb(x, base + 120000 + lag, base + 144000);
+  std::printf("%-22s sr=48000  speech %6.1f -> %6.1f dB | pause %6.1f -> %6.1f dB | worst frame %.2f ms of 10\n", "DeepFilterNet", speechIn,
+              speechOut, quietIn, quietOut, worst);
+  CHECK(finite, "DeepFilterNet output contains NaN or infinity");
+  CHECK(quietOut < quietIn - 25.0f, "DeepFilterNet only removed %.1f dB of noise", quietIn - quietOut);
+  CHECK(speechOut > speechIn - 6.0f, "DeepFilterNet ate the voice (%.1f dB)", speechOut - speechIn);
+  CHECK(worst < 5.0, "DeepFilterNet needs %.1f ms for a 10 ms frame", worst);
+}
+#endif
+
+int main(int argc, char** argv) {
+  (void)argc;
+  (void)argv;
+#ifdef AURA_HAVE_DFN
+  if (argc > 1) runDeep(argv[1]);
+  else CHECK(false, "pass the DeepFilterNet model path as the first argument");
+#endif
   runDenoiser();
   runPitch();
   runDereverb();
@@ -219,10 +262,11 @@ int main() {
     run("everything at maximum", sr, max, false);
   }
 
-  const aura::Settings s = aura::parseSettings("enabled=0\r\nwarmth=80\r\nfoo=1\r\nair=abc\r\ningain=99\r\n=5\r\nwidth=-3\r\nns=70\r\nmute=1\r\npop=250\r\npitch=-30\r\ndereverb=40\r\n");
+  const aura::Settings s = aura::parseSettings("enabled=0\r\nnsengine=1\r\nwarmth=80\r\nfoo=1\r\nair=abc\r\ningain=99\r\n=5\r\nwidth=-3\r\nns=70\r\nmute=1\r\npop=250\r\npitch=-30\r\ndereverb=40\r\n");
   CHECK(s.params.pitch == -12.0f && std::fabs(s.dereverb - 0.4f) < 1e-5f, "pitch/dereverb were not parsed");
   CHECK(std::fabs(s.nsStrength - 0.7f) < 1e-5f && s.mute && s.params.pop == 1.0f, "ns/mute/pop were not parsed");
   CHECK(!s.enabled, "enabled=0 was not parsed");
+  CHECK(s.nsEngine == 1, "nsengine was not parsed");
   CHECK(std::fabs(s.params.warmth - 0.8f) < 1e-5f, "warmth=%f", s.params.warmth);
   CHECK(std::fabs(s.params.air - aura::Params().air) < 1e-5f, "garbage changed air to %f", s.params.air);
   CHECK(s.params.inGainDb == 24.0f, "ingain was not clamped: %f", s.params.inGainDb);

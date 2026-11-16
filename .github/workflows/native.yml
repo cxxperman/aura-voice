@@ -11,18 +11,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # DeepFilterNet 3: the high-quality noise suppressor, built from its Rust sources as a static library.
+      - name: Fetch DeepFilterNet v0.5.6
+        shell: bash
+        run: git clone --depth 1 --branch v0.5.6 https://github.com/Rikorose/DeepFilterNet third_party/dfn
+      - uses: actions/cache@v4
+        with:
+          path: |
+            third_party/dfn/target
+            ~/.cargo/registry
+          key: dfn-0.5.6-staticlib-rust1.72
+      - name: Build libDF
+        shell: bash
+        working-directory: third_party/dfn
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          # The sources and their locked dependencies date from 2023; build them with a compiler from then.
+          rustup toolchain install 1.72.1 --profile minimal
+          cargo +1.72.1 rustc -p deep_filter --release --locked --lib --features capi --crate-type staticlib
+
       # The system module (APO) and its installer helper
       - name: Configure native
-        run: cmake -S native -B native/build -A x64 -T ClangCL
+        shell: bash
+        run: cmake -S native -B native/build -A x64 -T ClangCL "-DAURA_DFN_LIB=$(cygpath -m "$PWD/third_party/dfn/target/release/df.lib")"
       - name: Build native
         run: cmake --build native/build --config Release
       - name: Test the voice chain
-        run: native/build/Release/dsp_test.exe
+        run: native/build/Release/dsp_test.exe third_party/dfn/models/DeepFilterNet3_onnx.tar.gz
       - name: Stage native binaries
         shell: bash
         run: |
           mkdir -p native/bin
           cp native/build/Release/AuraAPO.dll native/build/Release/AuraSetup.exe native/build/RNNoise-LICENSE.txt native/bin/
+          cp third_party/dfn/models/DeepFilterNet3_onnx.tar.gz native/bin/
+          cp third_party/dfn/LICENSE-MIT native/bin/DeepFilterNet-LICENSE.txt
       - uses: actions/upload-artifact@v4
         with:
           name: aura-native
