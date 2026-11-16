@@ -37,6 +37,13 @@ const FREQS = [
   { id: 'f11000', f: 11000, q: 0, name: 'Воздух · 11 кГц', short: 'Воздух', hint: 'Дорогой «студийный» верх и дыхание' },
 ].map((p) => ({ ...p, eq: true, min: -12, max: 12, format: dbFormat }));
 PARAMS.push(...FREQS);
+// Bass and treble: the two-knob tone control, for those who want nothing more. Each knob moves a
+// few of the frequency bands together, so the two views always agree.
+const TONE = [
+  { id: 'bass', name: 'Бас', short: 'Бас', hint: 'Весь низ голоса: вверх — глубже и крупнее, вниз — легче' },
+  { id: 'treble', name: 'Верх', short: 'Верх', hint: 'Вся яркость и чёткость: вверх — звонче, вниз — мягче' },
+].map((p) => ({ ...p, tone: true, min: -12, max: 12, format: dbFormat }));
+PARAMS.push(...TONE);
 
 // A preset is a frequency curve (the eight bands, dB) plus processing. Bands left out are flat.
 const PRESETS = {
@@ -90,7 +97,7 @@ const DEFAULTS = {
   mic: 'auto', // microphone profile: 'auto' (by the device's name), 'none', 'measured', or an id from MIC_PROFILES
   micMeasured: null, // { hp, bands } built by auto-setup from the user's own voice
   eq: { ...PRESETS.studio.eq }, // frequency equalizer: band id → dB
-  eqTab: 'freq', // which bank the equalizer shows: 'freq' or 'tone' (processing)
+  eqTab: 'simple', // which bank the equalizer shows: 'simple' (bass and treble), 'freq' or 'tone' (processing)
   loud: 0, // output loudness to hold, LUFS; 0 = leave it
   dehum: false, // notch out 50 Hz mains hum
   voiceLevels: null, // third-octave spectrum of the user's own voice (dB), measured by auto-setup
@@ -494,7 +501,7 @@ $('#presetLoad').addEventListener('click', async () => {
   // Only the sound travels in a file; room settings (noise, echo, gate) stay yours.
   const v = {};
   const eq = {};
-  for (const p of PARAMS.filter((q) => !q.global)) {
+  for (const p of PARAMS.filter((q) => !q.global && !q.tone)) {
     const n = Number((p.eq ? data.eq : data.v)?.[p.id]);
     const value = Number.isFinite(n) ? clamp(Math.round(n), p.min ?? 0, p.max ?? 100) : p.eq ? 0 : PRESETS.studio.v[p.id];
     if (p.eq) { if (value) eq[p.id] = value; } else v[p.id] = value;
@@ -512,16 +519,22 @@ const fill = (input) => {
 };
 const slidersEl = $('#sliders');
 const sliderInputs = {};
-const bank = (p) => (p.eq ? state.eq : p.global ? state.g : state.v);
+const toneBank = {
+  get bass() { return state.eq.f100 || 0; },
+  set bass(v) { state.eq.f100 = v; state.eq.f200 = Math.round(v / 2); },
+  get treble() { return state.eq.f11000 || 0; },
+  set treble(v) { state.eq.f11000 = v; state.eq.f6000 = Math.round(v * 0.6); state.eq.f3200 = Math.round(v * 0.3); },
+};
+const bank = (p) => (p.tone ? toneBank : p.eq ? state.eq : p.global ? state.g : state.v);
 const show = (p, v) => (p.format ? p.format(Number(v)) : String(v));
 // One instrument instead of a column of sliders: every setting is a band of an equalizer, and a
 // glowing curve runs through the handles, so a character reads as a shape. Two banks: what the
 // voice is like (presets move these) and what the room needs (they stay yours).
-const EQ_IDLE = ['Эквалайзер голоса', 'Пресет ставит полосы, вы подправляете. Наведите на любую — здесь появится, что она меняет'];
+const EQ_IDLE = ['Эквалайзер голоса', 'Две ручки — «Бас и верх». Тоньше — во вкладке «Частоты». Наведите на полосу — здесь появится, что она меняет'];
 slidersEl.innerHTML = `<div class="eq-head"><b id="eqName"></b><em id="eqValue"></em><small id="eqHint"></small></div>
-<div class="eq-tools"><div class="segmented eq-tabs" id="eqTabs" role="radiogroup" aria-label="Что показывает эквалайзер"><button type="button" role="radio" data-bank="freq">Частоты</button><button type="button" role="radio" data-bank="tone">Обработка</button></div><button type="button" class="link" id="eqReset">Сбросить частоты</button></div>
+<div class="eq-tools"><div class="segmented eq-tabs" id="eqTabs" role="radiogroup" aria-label="Что показывает эквалайзер"><button type="button" role="radio" data-bank="simple">Бас и верх</button><button type="button" role="radio" data-bank="freq">Частоты</button><button type="button" role="radio" data-bank="tone">Обработка</button></div><button type="button" class="link" id="eqReset">Сбросить частоты</button></div>
 <div class="eq-body"><svg class="eq-curve" aria-hidden="true"><defs><linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="eq-stop-a"/><stop offset="1" class="eq-stop-b"/></linearGradient></defs></svg>
-<div class="eq-bank" data-bank="tone" data-title="Обработка"></div><div class="eq-bank" data-bank="freq" data-title="Частоты, дБ"></div><div class="eq-bank room" data-title="Комната и микрофон"></div></div>`;
+<div class="eq-bank simple" data-bank="simple" data-title="Бас и верх, дБ"></div><div class="eq-bank" data-bank="tone" data-title="Обработка"></div><div class="eq-bank" data-bank="freq" data-title="Частоты, дБ"></div><div class="eq-bank room" data-title="Комната и микрофон"></div></div>`;
 const eqSvg = slidersEl.querySelector('svg');
 const eqBody = slidersEl.querySelector('.eq-body');
 const eqBanks = [...slidersEl.querySelectorAll('.eq-bank')].map((el) => {
@@ -589,7 +602,7 @@ for (const p of PARAMS) {
   const value = label.querySelector('em');
   input._eq = true;
   input.setAttribute('aria-label', `${p.name}. ${p.hint}`);
-  const eqBank = eqBanks[p.eq ? 1 : p.global ? 2 : 0];
+  const eqBank = eqBanks.find((b) => (p.global ? b.el.classList.contains('room') : b.el.dataset.bank === (p.tone ? 'simple' : p.eq ? 'freq' : 'tone')));
   eqBank.inputs.push(input);
   label.addEventListener('pointerenter', () => eqShow(p, input));
   input.addEventListener('focus', () => eqShow(p, input));
@@ -599,6 +612,7 @@ for (const p of PARAMS) {
     bank(p)[p.id] = Number(input.value);
     value.textContent = show(p, input.value);
     fill(input);
+    if (p.tone || p.eq) renderSliders(); // the two-knob view and the bands are the same thing seen twice
     if (!p.global) {
       // Hand-tuning a sound turns it into the user's own preset, so it is never lost.
       state.custom = { v: { ...state.v }, eq: { ...state.eq } };
@@ -623,10 +637,10 @@ for (const p of PARAMS) {
 }
 // «Характер» and «Частоты» share the left side of the card; the room bank stays.
 function showEqTab(tab) {
-  state.eqTab = tab === 'freq' ? 'freq' : 'tone';
+  state.eqTab = ['simple', 'freq', 'tone'].includes(tab) ? tab : 'simple';
   for (const b of $('#eqTabs').children) b.setAttribute('aria-checked', String(b.dataset.bank === state.eqTab));
   for (const b of eqBanks) if (b.el.dataset.bank) b.el.hidden = b.el.dataset.bank !== state.eqTab;
-  $('#eqReset').hidden = state.eqTab !== 'freq' || !FREQS.some((p) => state.eq[p.id]);
+  $('#eqReset').hidden = state.eqTab === 'tone' || !FREQS.some((p) => state.eq[p.id]);
   queueEq();
 }
 $('#eqTabs').addEventListener('click', (e) => {
@@ -642,7 +656,7 @@ $('#eqReset').addEventListener('click', () => {
   renderPreset();
   reportToTray();
   renderSliders(true);
-  showEqTab('freq');
+  showEqTab(state.eqTab);
   applyAll();
   save();
 });
@@ -1905,7 +1919,7 @@ let specAn = null;
 let specBins = null;
 let specLast = 0;
 function drawSpectrum(now) {
-  const bank = eqBanks[1];
+  const bank = eqBanks.find((b) => b.el.dataset.bank === 'freq');
   if (now - specLast < 45 || bank.el.hidden || !slidersEl.offsetParent) return;
   specLast = now;
   const box = eqBody.getBoundingClientRect();
