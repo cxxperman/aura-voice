@@ -39,3 +39,8 @@ jobs:
         with:
           name: aura-installer
           path: dist/Aura-Setup-*.exe
+      - name: Show what went into the app
+        shell: bash
+        run: |
+          ls -la dist/win-unpacked/Aura.exe dist/win-unpacked/resources dist/win-unpacked/resources/native
+          npx asar list dist/win-unpacked/resources/app.asar | grep -v node_modules
