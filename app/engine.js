@@ -13,6 +13,7 @@ class VoiceDynamics extends AudioWorkletProcessor {
       { name: 'gate',  defaultValue: -100, minValue: -100, maxValue: 0, automationRate: 'k-rate' },
       { name: 'deess', defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
       { name: 'auto',  defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
+      { name: 'pop',   defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
     ];
   }
   constructor() {
@@ -20,15 +21,17 @@ class VoiceDynamics extends AudioWorkletProcessor {
     this.env = 0; this.open = false; this.hold = 0; this.g = 1;   // gate
     this.rms = 0.01; this.ag = 1;                                  // auto-level
     this.lp = 0; this.envHi = 0; this.dg = 1;                      // de-esser
+    this.lo = 0; this.envLo = 0; this.pg = 1;                      // de-plosive
   }
   process(inputs, outputs, p) {
     const input = inputs[0][0], out = outputs[0][0];
     if (!input) return true;
     const sr = sampleRate;
     const thr = Math.pow(10, p.gate[0] / 20), thrClose = thr * 0.63; // 4 dB of hysteresis
-    const de = p.deess[0], auto = p.auto[0] > 0.5;
+    const de = p.deess[0], auto = p.auto[0] > 0.5, pop = p.pop[0];
+    const loA = 1 - Math.exp(-2 * Math.PI * 100 / sr), loRel = Math.exp(-1 / (0.06 * sr)), popThr = 0.04;
     const envRel = Math.exp(-1 / (0.05 * sr));
-    const gAtt = 1 - Math.exp(-1 / (0.002 * sr)), gRel = 1 - Math.exp(-1 / (0.12 * sr));
+    const gAtt = 1 - Math.exp(-1 / (0.002 * sr)), gRel = 1 - Math.exp(-1 / (0.25 * sr));
     const holdN = 0.18 * sr, floor = 0.03;
     const speech = Math.max(thr, 0.01);            // only level-ride on actual speech
     const rmsA = 1 - Math.exp(-1 / (0.4 * sr)), agA = 1 - Math.exp(-1 / (1.5 * sr));
@@ -58,6 +61,13 @@ class VoiceDynamics extends AudioWorkletProcessor {
         this.ag += (1 - this.ag) * agA;
       }
       x *= this.g * this.ag;
+
+      // De-plosive: a burst below ~100 Hz is breath on the capsule, not speech — duck that band while it lasts.
+      this.lo += (x - this.lo) * loA;
+      this.envLo = Math.max(Math.abs(this.lo), this.envLo * loRel);
+      const tp = pop > 0 && this.envLo > popThr ? Math.pow(popThr / this.envLo, pop * 0.9) : 1;
+      this.pg += (tp - this.pg) * (tp < this.pg ? 0.05 : 0.004);
+      x = x - this.lo + this.lo * this.pg;
 
       // De-esser: split at ~5 kHz and duck only the top band when sibilance spikes.
       this.lp += (x - this.lp) * lpA;
@@ -274,7 +284,7 @@ class Engine {
     const n = this.n;
     const t = this.ctx.currentTime;
     const set = (param, value) => (instant ? param.setValueAtTime(value, t) : param.setTargetAtTime(value, t, 0.03));
-    const v = Object.fromEntries(Object.entries(state.v).map(([k, x]) => [k, x / 100]));
+    const v = Object.fromEntries(Object.entries({ ...state.v, clean: state.g.clean }).map(([k, x]) => [k, x / 100]));
 
     set(n.inGain.gain, dbToGain(state.inGain));
     set(n.outGain.gain, dbToGain(state.outGain));
@@ -301,6 +311,7 @@ class Engine {
     p.get('gate').setValueAtTime(v.clean > 0.01 ? -65 + v.clean * 40 : -100, t);
     p.get('deess').setValueAtTime(v.deess, t);
     p.get('auto').setValueAtTime(state.auto ? 1 : 0, t);
+    p.get('pop').setValueAtTime(state.g.pop / 100, t);
 
     this.monitor = state.monitor;
     this._route();
@@ -329,7 +340,7 @@ class Engine {
         echoCancellation: false,
         autoGainControl: false,
         // In system mode the module's own neural denoiser does this for every program.
-        noiseSuppression: !!state.ns && !this.system,
+        noiseSuppression: state.g.ns > 0 && !this.system,
         channelCount: 1,
       },
     });

@@ -88,7 +88,7 @@ h1 {
 .bar i { display: block; height: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; }
 .bar.gr i { background: rgba(255, 255, 255, 0.7); transform-origin: right; }
 
-.actions { margin-top: 22px; display: flex; gap: 10px; }
+.actions { margin-top: 22px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
 .pill {
   height: 36px; padding: 0 18px; border-radius: 18px;
   border: 1px solid var(--glass-edge); border-top-color: var(--glass-top);
@@ -118,7 +118,7 @@ h1 {
 
 .presets {
   flex: none;
-  display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; padding: 4px;
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; padding: 4px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--glass-edge);
   border-radius: 16px;

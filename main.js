@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, ipcMain, Tray, Menu } = require('electron');
+const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -19,7 +19,9 @@ if (!devRun && !app.requestSingleInstanceLock()) app.quit();
 let win;
 let tray;
 let quitting = false;
-let ui = { on: false, preset: '', presetName: '', presets: [] }; // what the window last reported
+let ui = { on: false, mute: false, system: false, preset: '', presetName: '', presets: [] }; // what the window last reported
+const HOTKEY_POWER = 'Ctrl+Shift+F9';
+const HOTKEY_MUTE = 'Ctrl+Shift+F10';
 
 function createWindow() {
   win = new BrowserWindow({
@@ -91,13 +93,14 @@ const command = (name, arg) => win?.webContents.send('tray:command', name, arg);
 
 function refreshTray() {
   if (!tray) return;
-  tray.setImage(asset(ui.on ? 'tray.png' : 'tray-off.png'));
-  tray.setToolTip(ui.on ? `Aura — ${ui.presetName}` : 'Aura — выключено');
+  tray.setImage(asset(ui.on && !ui.mute ? 'tray.png' : 'tray-off.png'));
+  tray.setToolTip(ui.mute ? 'Aura — микрофон заглушён' : ui.on ? `Aura — ${ui.presetName}` : 'Aura — выключено');
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Открыть Aura', click: showWindow },
       { type: 'separator' },
-      { label: 'Обработка голоса', type: 'checkbox', checked: ui.on, click: () => command('power') },
+      { label: 'Обработка голоса', type: 'checkbox', checked: ui.on, accelerator: HOTKEY_POWER, registerAccelerator: false, click: () => command('power') },
+      { label: 'Заглушить микрофон', type: 'checkbox', checked: ui.mute, enabled: ui.system, accelerator: HOTKEY_MUTE, registerAccelerator: false, click: () => command('mute') },
       {
         label: 'Характер',
         enabled: ui.presets.length > 0,
@@ -133,6 +136,8 @@ ipcMain.on('ui:state', (_e, state) => {
   if (!state || typeof state !== 'object') return;
   ui = {
     on: !!state.on,
+    mute: !!state.mute,
+    system: !!state.system,
     preset: String(state.preset || ''),
     presetName: String(state.presetName || ''),
     presets: Array.isArray(state.presets) ? state.presets.slice(0, 20).map((p) => ({ id: String(p.id), name: String(p.name) })) : [],
@@ -145,12 +150,42 @@ const dataDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'Aura');
 const binDir = app.isPackaged ? path.join(process.resourcesPath, 'native') : path.join(__dirname, 'native', 'bin');
 const installedDll = path.join(process.env.ProgramW6432 || process.env.ProgramFiles || 'C:\\Program Files', 'Aura', 'AuraAPO.dll');
 
+// The module's live meters: status.txt is rewritten ~8 times a second while it runs.
+ipcMain.handle('system:levels', () => {
+  try {
+    const file = path.join(dataDir, 'status.txt');
+    if (Date.now() - fs.statSync(file).mtimeMs > 1500) return null;
+    const out = {};
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const eq = line.indexOf('=');
+      if (eq > 0) out[line.slice(0, eq)] = Number(line.slice(eq + 1));
+    }
+    return out;
+  } catch {
+    return null;
+  }
+});
+
+// Windows and driver updates can wipe a microphone's effect slot. The DLL is then still on disk
+// but nothing runs it; notice that, so the window can offer to attach it again.
+let attached = null; // unknown until the first check
+function checkAttached() {
+  const reg = (args) => new Promise((resolve) => execFile('reg.exe', ['query', ...args], { windowsHide: true }, (err, out) => resolve(err ? '' : out)));
+  return reg(['HKLM\\SOFTWARE\\Aura', '/v', 'Device', '/reg:64']).then(async (out) => {
+    const guid = /\{[0-9a-fA-F-]{36}\}/.exec(out)?.[0];
+    if (!guid) return (attached = null);
+    const slot = await reg([`HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\Capture\\${guid}\\FxProperties`, '/v', '{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},2', '/reg:64']);
+    attached = /7C1D5A62-3F0E-4B7A-9E2B-A0D3C4F51E88/i.test(slot);
+  });
+}
+
 ipcMain.handle('system:status', () => {
   const status = {
     available: fs.existsSync(path.join(binDir, 'AuraSetup.exe')) && fs.existsSync(path.join(binDir, 'AuraAPO.dll')),
     installed: fs.existsSync(installedDll),
     alive: false,
   };
+  status.detached = status.installed && attached === false;
   try {
     // The module rewrites status.txt once a second while Windows is running it.
     status.alive = Date.now() - fs.statSync(path.join(dataDir, 'status.txt')).mtimeMs < 3000;
@@ -183,6 +218,7 @@ ipcMain.handle('system:setup', (_e, action, unprotect) => {
       let lines = [];
       try { lines = fs.readFileSync(log, 'utf8').split(/\r?\n/).filter(Boolean); } catch {}
       const ok = lines[0] === 'result=ok';
+      checkAttached();
       resolve({ ok, cancelled: !!err && !lines.length, lines: lines.slice(1).filter((l) => !l.startsWith('device=')) });
     });
   });
@@ -194,7 +230,14 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowed.has(permission)));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
   createWindow();
-  if (!devRun) createTray();
+  checkAttached();
+  setInterval(checkAttached, 60000);
+  if (!devRun) {
+    createTray();
+    // Work from inside a game, without alt-tabbing to the window.
+    globalShortcut.register(HOTKEY_POWER, () => command('power'));
+    globalShortcut.register(HOTKEY_MUTE, () => command('mute'));
+  }
 });
 
 app.on('second-instance', showWindow);

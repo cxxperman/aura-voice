@@ -95,7 +95,7 @@ struct Dynamics {
   void prepare(float sr) {
     envRel = std::exp(-1.0f / (0.05f * sr));
     gAtt = onePole(0.002f, sr);
-    gRel = onePole(0.12f, sr);
+    gRel = onePole(0.25f, sr);
     holdN = 0.18f * sr;
     rmsA = onePole(0.4f, sr);
     agA = onePole(1.5f, sr);

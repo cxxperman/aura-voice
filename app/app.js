@@ -11,8 +11,11 @@ const PARAMS = [
   { id: 'density', name: 'Плотность', hint: 'Ровный, «дикторский» звук' },
   { id: 'width', name: 'Объём', hint: 'Ширина в стерео' },
   { id: 'space', name: 'Пространство', hint: 'Лёгкая комната вокруг голоса' },
-  { id: 'clean', name: 'Тишина в паузах', hint: 'Глушит фон, пока вы молчите' },
   { id: 'deess', name: 'Мягкие «с» и «ш»', hint: 'Убирает резкие свистящие' },
+  // These two describe your room and your microphone technique, not a character, so presets leave them alone.
+  { id: 'clean', name: 'Тишина в паузах', hint: 'Глушит фон, пока вы молчите', global: true },
+  { id: 'ns', name: 'Шумоподавление', hint: 'Нейросеть: до 60 чистит фон, выше — глушит всё, кроме голоса', global: true },
+  { id: 'pop', name: 'Анти-хлопок', hint: 'Смягчает удары «п» и «б» в микрофон', global: true },
 ];
 
 const PRESETS = {
@@ -22,6 +25,7 @@ const PRESETS = {
   crystal: { name: 'Кристалл', hue: 176, v: { warmth: 30, clarity: 75, air: 80, density: 45, width: 50, space: 18, clean: 50, deess: 65 } },
   cinema: { name: 'Кино', hue: 348, v: { warmth: 80, clarity: 45, air: 40, density: 70, width: 70, space: 40, clean: 40, deess: 55 } },
   whisper: { name: 'Шёпот', hue: 140, v: { warmth: 45, clarity: 55, air: 90, density: 95, width: 60, space: 10, clean: 15, deess: 80 } },
+  custom: { name: 'Свой', hue: 44, v: null }, // whatever the user last dialled in by hand
 };
 
 const STORE_KEY = 'aura.state.v1';
@@ -32,7 +36,9 @@ const DEFAULTS = {
   inGain: 0,
   outGain: 0,
   auto: true,
-  ns: false,
+  g: { ns: 0, pop: 50, clean: 45 },
+  custom: null,
+  mute: false,
   monitor: false,
   inputId: '',
   outputId: undefined, // undefined = never chosen → auto-detect a virtual cable
@@ -42,7 +48,9 @@ const DEFAULTS = {
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY));
-    return { ...DEFAULTS, ...saved, v: { ...DEFAULTS.v, ...saved?.v } };
+    const g = { ...DEFAULTS.g, ...saved?.g };
+    if (saved?.ns === true && !saved.g) g.ns = 60; // older builds had an on/off switch
+    return { ...DEFAULTS, ...saved, g, v: { ...DEFAULTS.v, ...saved?.v } };
   } catch {
     return structuredClone(DEFAULTS);
   }
@@ -78,7 +86,10 @@ function pushSystem() {
       `enabled=${enabled ? 1 : 0}`,
       ...Object.keys(v).map((k) => `${k}=${v[k]}`),
       `auto=${state.auto ? 1 : 0}`,
-      `ns=${state.ns ? 1 : 0}`,
+      `clean=${state.g.clean}`, // after the preset values: the last one wins
+      `ns=${state.g.ns}`,
+      `pop=${state.g.pop}`,
+      `mute=${state.mute ? 1 : 0}`,
       `ingain=${state.inGain}`,
       `outgain=${state.outGain}`,
     ].join('\r\n') + '\r\n'
@@ -102,6 +113,7 @@ async function pollSystem() {
   sys = await window.auraSystem.status();
   if (sys.installed !== before) {
     $('#outputId').disabled = sys.installed;
+    $('#mute').disabled = !sys.installed; // only the module can silence the microphone for every program
     if (engine.running) await restartEngine();
     pushSystem();
     renderRoute();
@@ -125,7 +137,11 @@ function renderSystem() {
   // Give Windows a few seconds to load the module before calling it a failure.
   const silent = sys.installed && (startFailed || (engine.running && !engine.sampleMode && !sys.alive && Date.now() - onSince > 6000));
   let title, text, action;
-  if (!sys.installed) {
+  if (sys.detached) {
+    title = 'Windows отключила модуль';
+    text = 'Так бывает после обновления Windows или драйвера микрофона. Встройте модуль заново — настройки сохранятся.';
+    action = 'Встроить заново';
+  } else if (!sys.installed) {
     title = 'Встроить Aura в микрофон';
     text = 'Обработанный голос услышат все программы — без виртуального кабеля. Windows спросит права администратора, звук в системе прервётся на пару секунд.';
     action = 'Встроить';
@@ -138,13 +154,13 @@ function renderSystem() {
     text = sys.alive ? 'Модуль работает. Голос остаётся обработанным, даже когда это окно закрыто.' : 'Включите сферу, чтобы проверить, что модуль работает.';
     action = 'Убрать';
   }
-  card.classList.toggle('warn', silent);
+  card.classList.toggle('warn', silent || !!sys.detached);
   $('#sysTitle').textContent = title;
   $('#sysText').textContent = sysMessage || text;
   btn.textContent = sysBusy ? 'Подождите…' : action;
   btn.disabled = alt.disabled = sysBusy;
   alt.hidden = true;
-  btn.dataset.action = sys.installed ? 'uninstall' : 'install';
+  btn.dataset.action = sys.installed && !sys.detached ? 'uninstall' : 'install';
 }
 
 async function runSetup(action) {
@@ -181,7 +197,7 @@ function liveStatus() {
   if (engine.sampleMode) return setStatus('Играет проба — настраивайте звук');
   const c = engine.ctx;
   // +12 ms: look-ahead of the compressor and the limiter.
-  if (sys.installed) return setStatus(sys.alive ? `В эфире · встроено в микрофон, ${state.ns ? 'задержка 10 мс' : 'без задержки'}` : 'В эфире · жду ответа модуля…');
+  if (sys.installed) return setStatus(sys.alive ? `В эфире · встроено в микрофон, ${state.g.ns > 0 ? 'задержка 10 мс' : 'без задержки'}` : 'В эфире · жду ответа модуля…');
   const ms = Math.round((c.baseLatency + (c.outputLatency || 0)) * 1000 + 12);
   setStatus(`В эфире · задержка около ${ms} мс`);
 }
@@ -220,6 +236,8 @@ async function setPower(on) {
 // Keep the tray icon and its menu in step with the window.
 function reportToTray() {
   window.auraSystem?.report({
+    mute: state.mute && sys.installed,
+    system: sys.installed,
     on: engine.running,
     preset: state.preset,
     presetName: PRESETS[state.preset]?.name || '',
@@ -234,6 +252,7 @@ function renderPower() {
   powerBtn.setAttribute('aria-label', on ? 'Выключить обработку голоса' : 'Включить обработку голоса');
   $('#compare').disabled = !on;
   $('#sample').disabled = !on;
+  $('#tune').disabled = !on;
   renderSample();
   if (on || !statusEl.classList.contains('error')) liveStatus();
 }
@@ -253,7 +272,7 @@ for (const [id, p] of Object.entries(PRESETS)) {
 function selectPreset(id) {
   if (!PRESETS[id]) return;
   state.preset = id;
-  state.v = { ...PRESETS[id].v };
+  state.v = { ...(id === 'custom' ? state.custom || state.v : PRESETS[id].v) };
   renderPreset();
   renderSliders();
   applyAll();
@@ -274,6 +293,7 @@ const fill = (input) => {
 };
 const slidersEl = $('#sliders');
 const sliderInputs = {};
+const bank = (p) => (p.global ? state.g : state.v);
 for (const p of PARAMS) {
   const label = document.createElement('label');
   label.className = 'slider';
@@ -281,20 +301,36 @@ for (const p of PARAMS) {
   const input = label.querySelector('input');
   const value = label.querySelector('em');
   input.addEventListener('input', () => {
-    state.v[p.id] = Number(input.value);
+    bank(p)[p.id] = Number(input.value);
     value.textContent = input.value;
     fill(input);
+    if (!p.global) {
+      // Hand-tuning a character turns it into the user's own preset, so it is never lost.
+      state.custom = { ...state.v };
+      if (state.preset !== 'custom') {
+        state.preset = 'custom';
+        renderPreset();
+        reportToTray();
+      }
+    }
     applyAll();
     save();
+    if (p.id === 'ns') liveStatus();
   });
+  // Without the module, noise suppression is the browser's own and belongs to the capture: reopen the microphone.
+  if (p.id === 'ns') {
+    input.addEventListener('change', () => {
+      if (engine.running && !TEST && !sys.installed) engine.openMic(state).catch(() => {});
+    });
+  }
   sliderInputs[p.id] = { input, value };
   slidersEl.append(label);
 }
 function renderSliders() {
   for (const p of PARAMS) {
     const { input, value } = sliderInputs[p.id];
-    input.value = state.v[p.id];
-    value.textContent = state.v[p.id];
+    input.value = bank(p)[p.id];
+    value.textContent = bank(p)[p.id];
     fill(input);
   }
 }
@@ -317,16 +353,14 @@ for (const id of ['inGain', 'outGain']) {
 }
 
 /* ───────── Switches ───────── */
-for (const id of ['auto', 'ns', 'monitor']) {
+for (const id of ['auto', 'mute', 'monitor']) {
   const box = $(`#${id}`);
   box.checked = state[id];
-  box.addEventListener('change', async () => {
+  box.addEventListener('change', () => {
     state[id] = box.checked;
     save();
     applyAll();
-    // Noise suppression is a property of the capture itself — the microphone must be reopened.
-    if (id === 'ns' && engine.running && !TEST && !sys.installed) await engine.openMic(state).catch(() => {});
-    if (id === 'ns') liveStatus();
+    if (id === 'mute') reportToTray();
   });
 }
 
@@ -454,6 +488,58 @@ sampleBtn.addEventListener('click', async () => {
   liveStatus();
 });
 
+/* ───────── Auto-setup ─────────
+ * Listens to the room, then to the voice, and sets input gain, the gate and noise suppression from what it heard. */
+const tuneBtn = $('#tune');
+let tuning = false;
+async function listen(seconds, label) {
+  const levels = [];
+  const end = performance.now() + seconds * 1000;
+  while (performance.now() < end) {
+    setStatus(`${label} · ${Math.ceil((end - performance.now()) / 1000)}`);
+    const m = engine.meters();
+    if (m && m.in > -100) levels.push(m.in - state.inGain); // the raw microphone, before our own gain
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return levels.sort((a, b) => a - b);
+}
+const percentile = (sorted, p) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] : -100);
+
+tuneBtn.addEventListener('click', async () => {
+  if (tuning || recording || !engine.running || engine.sampleMode) return;
+  tuning = true;
+  tuneBtn.classList.add('live');
+  holdingOriginal = true; // measure the untouched microphone
+  pushSystem();
+  await new Promise((r) => setTimeout(r, 400));
+
+  const noise = percentile(await listen(3, 'Помолчите'), 0.5);
+  const speech = percentile(await listen(5, 'Говорите обычным голосом'), 0.8);
+  holdingOriginal = false;
+  tuning = false;
+  tuneBtn.classList.remove('live');
+
+  if (speech < noise + 6) {
+    pushSystem();
+    setStatus('Не расслышал голос. Попробуйте ещё раз, ближе к микрофону.', true);
+    return;
+  }
+  // Bring the voice to a healthy working level, put the gate just above the room, and pick
+  // noise suppression from how far the voice stands above the noise.
+  const gain = clamp(Math.round(-26 - speech), -12, 18);
+  const snr = speech - noise;
+  state.g.clean = clamp(Math.round((noise + gain + 16 + 65) / 0.4), 10, 80);
+  state.g.ns = snr > 45 ? 30 : snr > 30 ? 55 : 75;
+  state.auto = true;
+  $('#auto').checked = true;
+  renderSliders();
+  const gainInput = $('#inGain');
+  gainInput.value = gain;
+  gainInput.dispatchEvent(new Event('input')); // updates the label, applies and saves
+  setStatus(`Настроено: фон ${Math.round(noise)} дБ, голос ${Math.round(speech)} дБ`);
+  setTimeout(liveStatus, 6000);
+});
+
 /* ───────── Orb + meters ───────── */
 const cv = $('#orb');
 const g = cv.getContext('2d');
@@ -471,6 +557,14 @@ function setMeter([bar, text], frac, label) {
   text.textContent = label;
 }
 const dbLabel = (db) => (db < -70 ? '—' : `${Math.round(db)} дБ`);
+
+// Levels reported by the module, refreshed a few times a second while it is in use.
+let moduleLevels = null;
+setInterval(async () => {
+  if (!sys.installed || !engine.running || TEST || document.hidden) return (moduleLevels = null);
+  const l = await window.auraSystem.levels();
+  moduleLevels = l && Number.isFinite(l.in) ? l : null;
+}, 130);
 
 let lastText = 0;
 function frame(now) {
@@ -499,11 +593,18 @@ function frame(now) {
     const grFrac = -m.reduction / 20;
     const text = now - lastText > 120; // numbers at ~8 fps stay readable
     if (text) lastText = now;
-    setMeter(meterEls.in, inFrac, text ? dbLabel(m.in) : meterEls.in[1].textContent);
-    setMeter(meterEls.out, outFrac, text ? dbLabel(m.out) : meterEls.out[1].textContent);
-    // In system mode the compressor runs inside the microphone, out of this window's sight.
-    if (sys.installed && !engine.sampleMode) setMeter(meterEls.gr, 0, '—');
-    else setMeter(meterEls.gr, grFrac, text ? `${m.reduction.toFixed(1)} дБ` : meterEls.gr[1].textContent);
+    const mod = sys.installed && !engine.sampleMode ? moduleLevels : null;
+    if (mod) {
+      // The real numbers from inside the microphone: before the chain, after it, and how hard the compressor works.
+      setMeter(meterEls.in, (mod.in + 60) / 60, text ? dbLabel(mod.in) : meterEls.in[1].textContent);
+      setMeter(meterEls.out, (mod.out + 60) / 60, text ? dbLabel(mod.out) : meterEls.out[1].textContent);
+      setMeter(meterEls.gr, -mod.gr / 20, text ? `${mod.gr.toFixed(1)} дБ` : meterEls.gr[1].textContent);
+    } else {
+      setMeter(meterEls.in, inFrac, text ? dbLabel(m.in) : meterEls.in[1].textContent);
+      setMeter(meterEls.out, outFrac, text ? dbLabel(m.out) : meterEls.out[1].textContent);
+      if (sys.installed && !engine.sampleMode) setMeter(meterEls.gr, 0, '—');
+      else setMeter(meterEls.gr, grFrac, text ? `${m.reduction.toFixed(1)} дБ` : meterEls.gr[1].textContent);
+    }
   } else if (meterEls.in[1].textContent !== '—') {
     for (const k of Object.values(meterEls)) setMeter(k, 0, '—');
   }
@@ -560,6 +661,7 @@ function drawOrb() {
 
 /* ───────── Boot ───────── */
 async function boot() {
+  $('#mute').disabled = true; // until the module is known to be installed
   renderPreset();
   renderSliders();
   renderPower();
@@ -578,6 +680,12 @@ async function boot() {
   window.auraSystem?.onCommand((name, arg) => {
     if (name === 'power') setPower(!engine.running);
     if (name === 'preset') selectPreset(arg);
+    if (name === 'mute' && sys.installed) {
+      $('#mute').checked = state.mute = !state.mute;
+      save();
+      pushSystem();
+      reportToTray();
+    }
   });
   if (state.on) await setPower(true);
 

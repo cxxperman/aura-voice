@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // saving its settings, and running the installer (which shows a Windows admin prompt).
 contextBridge.exposeInMainWorld('auraSystem', {
   status: () => ipcRenderer.invoke('system:status'),
+  levels: () => ipcRenderer.invoke('system:levels'),
   write: (text) => ipcRenderer.invoke('system:write', text),
   setup: (action, unprotect) => ipcRenderer.invoke('system:setup', action, !!unprotect),
   // Tray menu <-> window
