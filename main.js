@@ -69,6 +69,9 @@ function createWindow() {
   win.once('ready-to-show', () => {
     if (!startHidden && !shotArg) win.show();
   });
+  // The window keeps running in the tray (the audio needs it), but it has no business drawing there.
+  const tellVisible = () => command('visible', win.isVisible() && !win.isMinimized());
+  for (const event of ['show', 'hide', 'minimize', 'restore']) win.on(event, tellVisible);
 
   // Closing the window keeps Aura in the tray: the voice stays on, like a proper background utility.
   win.on('close', (e) => {
@@ -87,6 +90,21 @@ function createWindow() {
   });
 
   if (shotArg || testMode || probeMode) {
+    // dev: AURA_HIDE_TEST=1 measures how many animation frames the page gets while shown and while hidden.
+    if (process.env.AURA_HIDE_TEST) {
+      const count = "new Promise((r) => { let n = 0; const t = performance.now(); (function f() { n++; if (performance.now() - t < 1000) requestAnimationFrame(f); else r(n); })(); setTimeout(() => r(n), 1500); })";
+      const appFrames = "new Promise((r) => { const a = lastFrame; setTimeout(() => r(lastFrame !== a), 700); })";
+      setTimeout(async () => {
+        const js = (code) => win.webContents.executeJavaScript(code).catch((e) => 'failed: ' + e.message);
+        console.log('[hide-test] shown : raw rAF/s =', await js(count), '| app loop running =', await js(appFrames), '| document.hidden =', await js('document.hidden'));
+        win.hide();
+        await new Promise((r) => setTimeout(r, 800));
+        console.log('[hide-test] hidden: raw rAF/s =', await js(count), '| app loop running =', await js(appFrames), '| document.hidden =', await js('document.hidden'), '| windowVisible =', await js('windowVisible'));
+        win.show();
+        await new Promise((r) => setTimeout(r, 800));
+        console.log('[hide-test] reshown: app loop running =', await js(appFrames), '| windowVisible =', await js('windowVisible'));
+      }, 2500);
+    }
     // dev: AURA_EARLY_SHOT=<ms after load> saves an extra frame, e.g. to look at the launch animation
     if (shotArg && process.env.AURA_EARLY_SHOT) {
       win.webContents.once('did-finish-load', () => {
@@ -125,7 +143,7 @@ function createWindow() {
         console.log('[dom]', summary);
       }
       app.quit();
-    }, probeMode ? 10000 : shotArg ? 14000 : 4500);
+    }, process.env.AURA_HIDE_TEST ? 12000 : probeMode ? 10000 : shotArg ? 14000 : 4500);
   }
 }
 
@@ -443,6 +461,7 @@ ipcMain.handle('system:status', () => {
   const status = {
     available: fs.existsSync(path.join(binDir, 'AuraSetup.exe')) && fs.existsSync(path.join(binDir, 'AuraAPO.dll')),
     installed: fs.existsSync(installedDll),
+    visible: !!win && win.isVisible() && !win.isMinimized(),
     alive: false,
   };
   status.detached = status.installed && attached === false;

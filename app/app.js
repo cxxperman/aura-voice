@@ -69,9 +69,18 @@ function loadState() {
 }
 const state = loadState();
 if (TEST || PROBE) state.on = true;
-const save = () => {
-  if (!TEST && !PROBE && !DATA) localStorage.setItem(STORE_KEY, JSON.stringify(state));
+// Debounced: a slider drag fires dozens of changes a second, and each save serialises the whole state.
+let saveTimer = 0;
+const flushSave = () => {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  localStorage.setItem(STORE_KEY, JSON.stringify(state));
 };
+const save = () => {
+  if (TEST || PROBE || DATA) return;
+  if (!saveTimer) saveTimer = setTimeout(flushSave, 300);
+};
+addEventListener('pagehide', () => saveTimer && flushSave());
 
 const engine = new Engine();
 let devices = [];
@@ -128,6 +137,7 @@ async function pollSystem() {
   if (!window.auraSystem || TEST) return;
   const before = sys.installed;
   sys = await window.auraSystem.status();
+  setWindowVisible(sys.visible !== false);
   if (sys.installed !== before) {
     $('#outputId').disabled = sys.installed;
     $('#mute').disabled = !sys.installed; // only the module can silence the microphone for every program
@@ -136,7 +146,7 @@ async function pollSystem() {
     renderRoute();
   }
   renderSystem();
-  if (engine.running) liveStatus();
+  if (engine.running && !recording && !tuning && performance.now() > statusHold) liveStatus();
 }
 
 async function restartEngine() {
@@ -217,10 +227,22 @@ $('#sysAlt').addEventListener('click', () => runSetup('uninstall'));
 
 /* ───────── Status ───────── */
 const statusEl = $('#status');
-function setStatus(text, isError = false) {
+let flashTimer = 0;
+let statusHold = 0; // until then the 2-second poll leaves the line alone
+// kind: false (plain) | true (error) | 'warn'
+function setStatus(text, kind = false) {
+  clearTimeout(flashTimer);
+  statusHold = 0;
   statusEl.textContent = text;
   statusEl.title = text; // the line is clamped; the tooltip always has all of it
-  statusEl.classList.toggle('error', isError);
+  statusEl.classList.toggle('error', kind === true);
+  statusEl.classList.toggle('warn', kind === 'warn');
+}
+// A message that stays long enough to be read, then gives the line back to the live status.
+function flash(text, kind = false, ms = kind ? 7000 : 4000) {
+  setStatus(text, kind);
+  statusHold = performance.now() + ms;
+  flashTimer = setTimeout(liveStatus, ms);
 }
 // What the optional stages cost: each one has to look a little way ahead.
 function latencyText() {
@@ -296,6 +318,7 @@ function renderPower() {
   document.body.classList.toggle('on', on);
   powerBtn.setAttribute('aria-pressed', String(on));
   powerBtn.setAttribute('aria-label', on ? 'Выключить обработку голоса' : 'Включить обработку голоса');
+  if (!on) holdCompare(false);
   $('#compare').disabled = !on;
   $('#sample').disabled = !on;
   $('#tune').disabled = !on;
@@ -320,7 +343,7 @@ function selectPreset(id) {
   state.preset = id;
   state.v = { pitch: 0, ...(id === 'custom' ? state.custom || state.v : PRESETS[id].v) };
   renderPreset();
-  renderSliders();
+  renderSliders(true);
   applyAll();
   save();
   reportToTray();
@@ -328,15 +351,18 @@ function selectPreset(id) {
 function renderPreset() {
   const p = PRESETS[state.preset] || PRESETS.studio;
   for (const b of presetsEl.children) b.setAttribute('aria-checked', String(b.dataset.id === state.preset));
-  $('#presetTitle').textContent = p.name;
+  const title = $('#presetTitle');
+  if (title.textContent !== p.name) {
+    title.textContent = p.name;
+    if (!REDUCED_MOTION && windowVisible && !document.body.classList.contains('intro-on')) {
+      for (const a of title.getAnimations()) a.cancel();
+      title.animate([{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }], { duration: 200, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+    }
+  }
   document.documentElement.style.setProperty('--hue', p.hue);
 }
 
 /* ───────── Preset files ───────── */
-const flash = (text, isError = false) => {
-  setStatus(text, isError);
-  setTimeout(liveStatus, 4000);
-};
 $('#presetSave').addEventListener('click', async () => {
   const saved = await window.auraSystem.exportPreset({ app: 'aura', version: 1, name: PRESETS[state.preset]?.name || 'Свой', v: state.v });
   if (saved) flash('Пресет сохранён в файл');
@@ -397,16 +423,42 @@ for (const p of PARAMS) {
   sliderInputs[p.id] = { input, value };
   slidersEl.append(label);
 }
-function renderSliders() {
-  for (const p of PARAMS) {
+// With `animate`, thumbs and fills glide to the new values together (a preset moved them, and the
+// eye should see which ones and how far). The numbers and the sound switch at once.
+let sliderTween = 0;
+function renderSliders(animate = false) {
+  cancelAnimationFrame(sliderTween);
+  const rows = PARAMS.map((p) => {
     const { input, value } = sliderInputs[p.id];
-    input.value = bank(p)[p.id] ?? 0;
-    value.textContent = show(p, bank(p)[p.id] ?? 0);
-    fill(input);
-  }
+    const to = bank(p)[p.id] ?? 0;
+    value.textContent = show(p, to);
+    return { input, from: Number(input.value), to };
+  });
+  const settle = () => {
+    for (const r of rows) {
+      r.input.step = '1';
+      r.input.value = r.to;
+      fill(r.input);
+    }
+  };
+  if (!animate || REDUCED_MOTION || !windowVisible || !slidersEl.offsetParent) return settle();
+  for (const r of rows) r.input.step = 'any'; // fractional positions, for the length of the glide only
+  const t0 = performance.now();
+  const tick = (now) => {
+    const t = Math.min(1, (now - t0) / 280);
+    const e = 1 - Math.pow(1 - t, 4);
+    for (const r of rows) {
+      r.input.value = r.from + (r.to - r.from) * e;
+      fill(r.input);
+    }
+    if (t < 1) sliderTween = requestAnimationFrame(tick);
+    else settle();
+  };
+  sliderTween = requestAnimationFrame(tick);
 }
+slidersEl.addEventListener('pointerdown', () => renderSliders(), true); // grabbing a thumb mid-glide settles it first
 
-const signed = (db) => `${db > 0 ? '+' : ''}${db} дБ`;
+const signed = (db) => `${db > 0 ? '+' : db < 0 ? '−' : ''}${Math.abs(db)} дБ`;
 for (const id of ['inGain', 'outGain']) {
   const input = $(`#${id}`);
   const render = () => {
@@ -513,24 +565,33 @@ document.addEventListener('change', (e) => {
 
 /* ───────── Compare (hold) ───────── */
 const compareBtn = $('#compare');
+let held = false;
 const holdCompare = (on) => {
+  if (on === held) return; // releases that were never presses change nothing
+  held = on;
   compareBtn.classList.toggle('held', on);
-  if (sys.installed && !engine.sampleMode) {
+  if (on) {
     // The processing lives in the microphone: switch it off there for as long as the button is held.
-    holdingOriginal = on;
-    pushSystem();
+    if (sys.installed && !engine.sampleMode) holdingOriginal = true;
+    else engine.setBypass(true);
   } else {
-    engine.setBypass(on);
+    // Undo both ways of bypassing, whichever one the press used: the mode may have changed meanwhile.
+    holdingOriginal = false;
+    if (sys.installed) syncBypass();
+    else engine.setBypass(false);
   }
+  pushSystem();
 };
 compareBtn.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || tuning) return; // auto-setup is measuring the raw microphone right now
   compareBtn.setPointerCapture(e.pointerId);
   holdCompare(true);
 });
 for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) compareBtn.addEventListener(ev, () => holdCompare(false));
-compareBtn.addEventListener('keydown', (e) => (e.key === ' ' || e.key === 'Enter') && !e.repeat && holdCompare(true));
+compareBtn.addEventListener('keydown', (e) => (e.key === ' ' || e.key === 'Enter') && !e.repeat && !tuning && holdCompare(true));
 compareBtn.addEventListener('keyup', () => holdCompare(false));
 compareBtn.addEventListener('blur', () => holdCompare(false));
+addEventListener('blur', () => holdCompare(false)); // Alt+Tab while holding
 
 /* ───────── Sample loop ───────── */
 const sampleBtn = $('#sample');
@@ -582,7 +643,9 @@ const shortKey = (accel) => {
 };
 
 let dragFrom = -1;
+let padsDrawn = false; // no entrance on the very first paint
 function renderPads() {
+  const before = new Map([...padsEl.children].map((el) => [el._pad, el.getBoundingClientRect()]));
   // Sounds with the same name get a number on screen (the stored name is left alone), so two
   // "Bruh" pads can be told apart: the second one carries №2, the third №3.
   const seen = new Map();
@@ -597,6 +660,7 @@ function renderPads() {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'pad';
+      b._pad = pad;
       const accel = padKey(pad, index);
       if (accel) {
         const key = document.createElement('kbd');
@@ -627,7 +691,7 @@ function renderPads() {
       b.addEventListener('dragstart', (e) => {
         dragFrom = index;
         e.dataTransfer.effectAllowed = 'move';
-        b.classList.add('dragging');
+        requestAnimationFrame(() => b.classList.add('dragging')); // after the drag image is taken, so the ghost is not faded
       });
       b.addEventListener('dragend', () => {
         dragFrom = -1;
@@ -636,23 +700,46 @@ function renderPads() {
       b.addEventListener('dragover', (e) => {
         if (dragFrom < 0 || dragFrom === index) return;
         e.preventDefault();
-        b.classList.add('drop');
+        e.dataTransfer.dropEffect = 'move';
+        b.classList.add(dragFrom < index ? 'drop-after' : 'drop-before'); // which side it will land on
       });
-      b.addEventListener('dragleave', () => b.classList.remove('drop'));
+      b.addEventListener('dragleave', () => b.classList.remove('drop-before', 'drop-after'));
       b.addEventListener('drop', (e) => {
         e.preventDefault();
         if (dragFrom < 0 || dragFrom === index) return;
         const [moved] = state.pads.splice(dragFrom, 1);
         state.pads.splice(index, 0, moved);
+        dragFrom = -1; // the dragged element is about to be replaced and may never get its dragend
         padsChanged();
       });
       return b;
     })
   );
+  // Show the change as movement: pads slide from where they were, a new one fades in.
+  if (padsDrawn && !REDUCED_MOTION && windowVisible && padsEl.offsetParent) {
+    for (const el of padsEl.children) {
+      const was = before.get(el._pad);
+      if (!was) {
+        el.animate([{ opacity: 0, transform: 'scale(0.92)' }, { opacity: 1, transform: 'none' }], { duration: 200, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+        continue;
+      }
+      const now = el.getBoundingClientRect();
+      const dx = was.left - now.left;
+      const dy = was.top - now.top;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 240, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+    }
+  }
+  padsDrawn = true;
   $('#padsEmpty').hidden = state.pads.length > 0;
   // Warm the first pads up in the background, so even their first press is instant.
   for (const pad of state.pads.slice(0, 12)) padSamples(pad).catch(() => {});
 }
+// A steady "move" cursor across the gaps between pads; a drop there simply does nothing.
+padsEl.addEventListener('dragover', (e) => {
+  if (dragFrom < 0) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+});
 function padsChanged() {
   save();
   renderPads();
@@ -696,6 +783,7 @@ function openPadMenu(pad, x, y) {
   key.type = 'button';
   const keyLabel = () => (key.textContent = `Клавиша: ${pad.key || padKey(pad, state.pads.indexOf(pad)) || 'нет'}`);
   keyLabel();
+  key.addEventListener('blur', stopCapture); // clicking elsewhere must not leave the keyboard captured
   key.addEventListener('click', () => {
     key.textContent = 'Нажмите сочетание… (Esc — отмена, Backspace — убрать)';
     captureHotkey((accel) => {
@@ -723,14 +811,23 @@ function openPadMenu(pad, x, y) {
 
   menu.append(name, key, remove);
   document.body.append(menu);
-  const box = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(x, innerWidth - box.width - 12)}px`;
-  menu.style.top = `${Math.min(y, innerHeight - box.height - 12)}px`;
+  // offsetWidth, not getBoundingClientRect: the entrance animation is holding the menu at 94 % right now.
+  const left = Math.max(12, Math.min(x, innerWidth - menu.offsetWidth - 12));
+  const top = Math.max(12, Math.min(y, innerHeight - menu.offsetHeight - 12));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.transformOrigin = `${x - left}px ${y - top}px`; // grows out of the cursor even when clamped
   name.select();
 }
 addEventListener('pointerdown', (e) => {
-  if (padMenu && !padMenu.contains(e.target)) closePadMenu();
+  if (!padMenu || padMenu.contains(e.target)) return;
+  padMenu.querySelector('input')?.dispatchEvent(new Event('change')); // clicking away keeps a typed name
+  closePadMenu();
 });
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && padMenu) closePadMenu(); // during key capture the capturing handler takes Esc first
+});
+addEventListener('blur', () => closePadMenu());
 
 function stopLocalPad() {
   for (const source of padSources) {
@@ -801,7 +898,7 @@ async function playPad(pad) {
   }
   if (!mono) return flash('Файл этого звука не найден.', true);
   playLocal(mono);
-  if (!sys.installed) return flash('Звук слышите только вы: чтобы он шёл в микрофон, встройте Aura в него на вкладке «Настройки».', true);
+  if (!sys.installed) return flash('Звук слышите только вы. Чтобы он шёл в микрофон, встройте модуль в «Настройках».', 'warn');
   if (!(await window.auraSystem.writeClip(mono))) return flash('Не удалось передать звук модулю.', true);
   state.playId++;
   save();
@@ -887,9 +984,11 @@ addEventListener(
 async function syncHotkeys() {
   if (!window.auraSystem?.setHotkeys || TEST) return;
   const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null) });
-  hotkeyFailed = new Set(fixture ? fixture.failedHotkeys : failed || []);
+  const next = new Set(fixture ? fixture.failedHotkeys : failed || []);
+  const changed = next.size !== hotkeyFailed.size || [...next].some((accel) => !hotkeyFailed.has(accel));
+  hotkeyFailed = next;
   renderHotkeys();
-  renderPads();
+  if (changed) renderPads(); // not a second rebuild of the whole grid for nothing
 }
 function renderHotkeys() {
   for (const id of ['power', 'mute']) {
@@ -904,6 +1003,7 @@ function renderHotkeys() {
   $('#muteKey').textContent = state.hotkeys.mute ? ` · ${state.hotkeys.mute}` : '';
 }
 for (const id of ['power', 'mute']) {
+  $(`#key-${id}`).addEventListener('blur', stopCapture); // clicking elsewhere must not leave the keyboard captured
   $(`#key-${id}`).addEventListener('click', (e) => {
     e.currentTarget.textContent = 'Нажмите сочетание… (Esc — отмена, Backspace — убрать)';
     captureHotkey((accel) => {
@@ -941,17 +1041,37 @@ function renderGuide() {
   $('#guide2').classList.toggle('done', state.tuned);
   $('#guide3').classList.toggle('done', state.preset !== 'studio');
 }
-$('#guideClose').addEventListener('click', () => {
-  state.onboarded = true;
-  save();
-  renderGuide();
+$('#guideClose').addEventListener('click', (e) => {
+  const guide = $('#guide');
+  const close = () => {
+    guide.style.overflow = '';
+    state.onboarded = true; // only now, so the periodic re-render cannot hide the card mid-collapse
+    save();
+    renderGuide();
+  };
+  if (REDUCED_MOTION) return close();
+  e.currentTarget.disabled = true;
+  guide.style.overflow = 'hidden';
+  guide
+    .animate(
+      [
+        { height: `${guide.offsetHeight}px`, opacity: 1, marginBottom: '0px' },
+        { height: '0px', paddingTop: '0px', paddingBottom: '0px', opacity: 0, marginBottom: '-16px' },
+      ],
+      { duration: 260, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' }
+    )
+    .finished.then(close, close);
 });
 $('#guide1').addEventListener('click', () => showTab('setup'));
 
 /* ───────── Catalogue (UwUpad) ─────────
  * Browse and search the site's sounds without leaving the window: listen first (only you
  * hear the preview), then one click puts the sound on a pad. */
-const catalog = { feed: 'popular', query: '', items: [], total: 0, loading: false, started: false, previewing: null };
+const catalog = { feed: 'popular', query: '', items: [], total: 0, loading: false, started: false, previewing: null, request: 0 };
+const catalogPlays = new Map(); // item id → its play button
+function markPreview() {
+  for (const [id, button] of catalogPlays) button.textContent = catalog.previewing === id ? '■' : '▶';
+}
 const catalogList = $('#catalogList');
 const compact = new Intl.NumberFormat('ru', { notation: 'compact', maximumFractionDigits: 1 });
 const formatCount = (n) => (Number.isFinite(n) && n >= 0 ? compact.format(n) : '0'); // 1340327 → «1,3 млн»
@@ -959,7 +1079,8 @@ const formatDuration = (s) => (!(s >= 1) ? '<1 с' : s < 60 ? `${Math.round(s)} 
 const catalogNote = (text) => ($('#catalogNote').textContent = text);
 
 async function loadCatalog(reset) {
-  if (catalog.loading) return;
+  if (catalog.loading && !reset) return; // "show more" waits its turn; a new search or feed supersedes
+  const request = ++catalog.request;
   catalog.loading = true;
   if (reset) catalog.items = [];
   catalogNote('Загружаю…');
@@ -967,6 +1088,7 @@ async function loadCatalog(reset) {
     console.error('catalog failed:', err?.message);
     return null;
   });
+  if (request !== catalog.request) return; // a newer request went out while this one was on its way
   catalog.loading = false;
   if (!res || res.error) {
     renderCatalog();
@@ -980,6 +1102,9 @@ async function loadCatalog(reset) {
 function renderCatalog() {
   if (!catalog.started) return;
   const mine = new Set(state.pads.map((p) => p.source));
+  // The rebuild replaces the button that was just pressed; give the keyboard focus back to its successor.
+  const focusAt = catalogList.contains(document.activeElement) ? [...catalogList.querySelectorAll('button')].indexOf(document.activeElement) : -1;
+  catalogPlays.clear();
   catalogList.replaceChildren(
     ...catalog.items.map((item) => {
       const row = document.createElement('div');
@@ -990,6 +1115,7 @@ function renderCatalog() {
       play.setAttribute('aria-label', `Прослушать «${item.title}»`);
       play.textContent = catalog.previewing === item.id ? '■' : '▶';
       play.addEventListener('click', () => previewSound(item));
+      catalogPlays.set(item.id, play);
       const title = document.createElement('span');
       title.className = 'catalog-title';
       title.textContent = item.title.trim() || 'Без названия';
@@ -1020,6 +1146,7 @@ function renderCatalog() {
       return row;
     })
   );
+  if (focusAt >= 0) catalogList.querySelectorAll('button')[focusAt]?.focus({ preventScroll: true });
   $('#catalogMore').hidden = !catalog.items.length || catalog.items.length >= catalog.total;
   catalogNote(catalog.items.length || catalog.loading ? '' : 'Ничего не нашлось.');
   for (const b of $('#catalogFeeds').children) {
@@ -1031,14 +1158,14 @@ async function previewSound(item) {
   if (catalog.previewing === item.id) {
     catalog.previewing = null;
     stopLocalPad();
-    return renderCatalog();
+    return markPreview();
   }
   catalog.previewing = item.id;
-  renderCatalog();
+  markPreview();
   const done = () => {
     if (catalog.previewing === item.id) {
       catalog.previewing = null;
-      renderCatalog();
+      markPreview();
     }
   };
   try {
@@ -1063,6 +1190,7 @@ $('#catalogSearch').addEventListener('input', (e) => {
 });
 for (const b of $('#catalogFeeds').children) {
   b.addEventListener('click', () => {
+    for (const other of $('#catalogFeeds').children) other.setAttribute('aria-checked', String(other === b)); // answer now, not when the network does
     catalog.feed = b.dataset.feed;
     catalog.query = '';
     $('#catalogSearch').value = '';
@@ -1088,6 +1216,17 @@ function showTab(name) {
   }
 }
 for (const b of tabButtons) b.addEventListener('click', () => showTab(b.dataset.tab));
+for (const group of [$('#tabs'), presetsEl]) {
+  group.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const items = [...group.children];
+    const next = items[(items.indexOf(document.activeElement) + step + items.length) % items.length];
+    next.focus();
+    next.click();
+  });
+}
 
 /* ───────── Noise-suppression engine ───────── */
 const engineSelect = $('#nsEngine');
@@ -1138,7 +1277,7 @@ tuneBtn.addEventListener('click', async () => {
 
   if (speech < noise + 6) {
     pushSystem();
-    setStatus('Не расслышал голос. Попробуйте ещё раз, ближе к микрофону.', true);
+    flash('Не расслышал голос. Попробуйте ещё раз, ближе к микрофону.', true);
     return;
   }
   // Bring the voice to a healthy working level, put the gate just above the room, and pick
@@ -1156,8 +1295,7 @@ tuneBtn.addEventListener('click', async () => {
   state.tuned = true;
   save();
   renderGuide();
-  setStatus(`Настроено: фон ${Math.round(noise)} дБ, голос ${Math.round(speech)} дБ`);
-  setTimeout(liveStatus, 6000);
+  flash(`Настроено: фон ${Math.round(noise)} дБ, голос ${Math.round(speech)} дБ`, false, 6000);
 });
 
 /* ───────── Orb + meters ───────── */
@@ -1176,13 +1314,13 @@ function setMeter([bar, text], frac, label) {
   bar.style.transform = `scaleX(${clamp(frac, 0, 1).toFixed(3)})`;
   text.textContent = label;
 }
-const dbLabel = (db) => (db < -70 ? '—' : `${Math.round(db)} дБ`);
+const dbLabel = (db) => (db < -70 ? '—' : `${Math.round(db)} дБ`.replace('-', '−'));
 
 // Levels reported by the module, refreshed a few times a second while it is in use.
 let moduleLevels = null;
 setInterval(async () => {
   if (fixture?.levels) return (moduleLevels = fixture.levels), renderEngine();
-  if (!sys.installed || !engine.running || TEST || document.hidden) return (moduleLevels = null);
+  if (!sys.installed || !engine.running || TEST || !windowVisible) return (moduleLevels = null);
   const l = await window.auraSystem.levels();
   moduleLevels = l && Number.isFinite(l.in) ? l : null;
   if (fixture?.levels) moduleLevels = fixture.levels;
@@ -1190,14 +1328,32 @@ setInterval(async () => {
 }, 130);
 
 let lastText = 0;
+let lastFrame = 0;
+let orbSettled = false;
+// Told by the main process. With background throttling off (the audio needs that), Chromium keeps
+// reporting the page as visible in the tray, so document.hidden cannot be trusted.
+let windowVisible = true;
+let rafId = 0;
+function setWindowVisible(visible) {
+  if (visible === windowVisible) return;
+  windowVisible = visible;
+  cancelAnimationFrame(rafId);
+  if (visible) rafId = requestAnimationFrame(frame);
+}
 function frame(now) {
+  rafId = requestAnimationFrame(frame);
+  if (now - lastFrame < 15) return; // one pass per ~16 ms, on 144 and 240 Hz screens too
+  const k = clamp((now - lastFrame) / 16.667, 0.25, 3); // 1 at 60 Hz: motion keeps its speed if frames are late
+  lastFrame = now;
+  const ease = (a) => 1 - Math.pow(1 - a, k);
   const m = engine.meters();
   const target = m ? clamp((m.out + 55) / 45, 0, 1) : 0;
-  level += (target - level) * (target > level ? 0.35 : 0.1);
-  energy += ((m ? 1 : 0) - energy) * 0.08;
+  level += (target - level) * ease(target > level ? 0.35 : 0.1);
+  energy += ((m ? 1 : 0) - energy) * ease(0.08);
 
   const wantHue = PRESETS[state.preset]?.hue ?? 212;
-  hue += ((((wantHue - hue) % 360) + 540) % 360 - 180) * 0.08;
+  const hueGap = (((wantHue - hue) % 360) + 540) % 360 - 180;
+  hue += hueGap * ease(0.08);
 
   for (let b = 0; b < bands.length; b++) {
     let x = 0;
@@ -1205,10 +1361,13 @@ function frame(now) {
       for (let i = 0; i < 5; i++) x += m.spectrum[2 + b * 5 + i];
       x /= 5 * 255;
     }
-    bands[b] += (x - bands[b]) * 0.25;
+    bands[b] += (x - bands[b]) * ease(0.25);
   }
-  if (!REDUCED_MOTION) rot += 0.004 + level * 0.012;
-  drawOrb();
+  if (!REDUCED_MOTION) rot += (0.004 + level * 0.012) * k;
+  // Switched off and come to rest: the picture cannot change, so paint it one last time and stop.
+  const settled = !m && energy < 0.003 && level < 0.003 && Math.abs(hueGap) < 0.2;
+  if (!settled || !orbSettled) drawOrb();
+  orbSettled = settled;
 
   if (m) {
     const inFrac = (m.in + 60) / 60;
@@ -1232,9 +1391,8 @@ function frame(now) {
       else setMeter(meterEls.gr, grFrac, text ? `${m.reduction.toFixed(1)} дБ` : meterEls.gr[1].textContent);
     }
   } else if (meterEls.in[1].textContent !== '—') {
-    for (const k of Object.values(meterEls)) setMeter(k, 0, '—');
+    for (const meter of Object.values(meterEls)) setMeter(meter, 0, '—');
   }
-  requestAnimationFrame(frame);
 }
 
 function drawOrb() {
@@ -1310,12 +1468,12 @@ function drawOrb() {
     removeEventListener('keydown', finish, true);
     overlay.classList.add('leaving');
     document.body.classList.remove('intro-on');
-    setTimeout(() => overlay.remove(), 800);
+    setTimeout(() => overlay.remove(), 600);
   };
   if (TEST) return finish();
   addEventListener('pointerdown', finish, true);
   addEventListener('keydown', finish, true);
-  setTimeout(finish, REDUCED_MOTION ? 500 : 1550);
+  setTimeout(finish, REDUCED_MOTION ? 500 : 1450);
 })();
 
 /* ───────── Boot ───────── */
@@ -1349,7 +1507,7 @@ async function boot() {
   renderPreset();
   renderSliders();
   renderPower();
-  requestAnimationFrame(frame);
+  rafId = requestAnimationFrame(frame);
 
   if (!TEST) {
     // Device names are hidden until the microphone has been opened once.
@@ -1362,6 +1520,7 @@ async function boot() {
   await pollSystem();
   setInterval(pollSystem, 2000);
   window.auraSystem?.onCommand((name, arg) => {
+    if (name === 'visible') setWindowVisible(!!arg);
     if (name === 'power') setPower(!engine.running);
     if (name === 'preset') selectPreset(arg);
     if (name === 'pad' && state.pads[arg]) playPad(state.pads[arg]);
