@@ -460,3 +460,7 @@ select:disabled, .switch:has(input:disabled) { opacity: 0.4; pointer-events: non
   .devices { grid-template-columns: minmax(0, 1fr); }
   .field, .field.gain { grid-column: auto; }
 }
+
+/* Second and later pads with the same name: a number in the corner that truncation cannot reach. */
+.pad-copy { position: absolute; top: 4px; right: 5px; padding: 0 4px; border-radius: 4px; background: var(--accent-soft); font: 600 10px/1.5 inherit; font-style: normal; color: #fff; }
+.pad:has(.pad-copy) .pad-name { padding-top: 9px; }

@@ -583,6 +583,15 @@ const shortKey = (accel) => {
 
 let dragFrom = -1;
 function renderPads() {
+  // Sounds with the same name get a number on screen (the stored name is left alone), so two
+  // "Bruh" pads can be told apart: the second one carries №2, the third №3.
+  const seen = new Map();
+  const copies = state.pads.map((pad) => {
+    const key = pad.name.trim().toLowerCase();
+    const n = (seen.get(key) || 0) + 1;
+    seen.set(key, n);
+    return n;
+  });
   padsEl.replaceChildren(
     ...state.pads.map((pad, index) => {
       const b = document.createElement('button');
@@ -599,8 +608,15 @@ function renderPads() {
       label.className = 'pad-name';
       label.dir = 'auto';
       label.textContent = pad.name;
+      if (copies[index] > 1) {
+        // Its own corner badge: a suffix on the name would be the first thing truncation cuts off.
+        const copy = document.createElement('i');
+        copy.className = 'pad-copy';
+        copy.textContent = `№${copies[index]}`;
+        b.append(copy);
+      }
       b.append(label);
-      b.title = `${pad.name}${accel ? ' · ' + accel : ''}${hotkeyFailed.has(accel) ? ' (занята другой программой)' : ''} — правый клик: имя, клавиша, удаление; перетащите, чтобы переставить`;
+      b.title = `${pad.name}${copies[index] > 1 ? ` (№${copies[index]})` : ''}${accel ? ' · ' + accel : ''}${hotkeyFailed.has(accel) ? ' (занята другой программой)' : ''} — правый клик: имя, клавиша, удаление; перетащите, чтобы переставить`;
       b.addEventListener('click', () => playPad(pad));
       b.addEventListener('contextmenu', (e) => {
         e.preventDefault();
