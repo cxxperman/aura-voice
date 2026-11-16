@@ -130,8 +130,8 @@ function renderSystem() {
     action = 'Встроить';
   } else if (silent) {
     title = 'Windows не запустила модуль';
-    text = 'Пока модуль в таком состоянии, микрофон может не работать и в других программах. Скорее всего, мешает защищённый режим звукового процесса: у модуля нет платной подписи. «Разрешить» выключает этот режим (он нужен только для DRM-аудио) и возвращает его при удалении. «Убрать» просто вернёт микрофон как был.';
-    action = 'Разрешить и повторить';
+    text = 'Пока модуль в таком состоянии, микрофон может не работать и в других программах. «Убрать» вернёт микрофон как был; после этого модуль можно встроить заново.';
+    action = 'Убрать';
   } else {
     title = 'Aura встроена в микрофон';
     text = sys.alive ? 'Модуль работает. Голос остаётся обработанным, даже когда это окно закрыто.' : 'Включите сферу, чтобы проверить, что модуль работает.';
@@ -142,8 +142,8 @@ function renderSystem() {
   $('#sysText').textContent = sysMessage || text;
   btn.textContent = sysBusy ? 'Подождите…' : action;
   btn.disabled = alt.disabled = sysBusy;
-  alt.hidden = !silent;
-  btn.dataset.action = !sys.installed ? 'install' : silent ? 'unprotect' : 'uninstall';
+  alt.hidden = true;
+  btn.dataset.action = sys.installed ? 'uninstall' : 'install';
 }
 
 async function runSetup(action) {
