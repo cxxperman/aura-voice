@@ -408,3 +408,55 @@ select option { background: #1c1c22; color: #fff; }
 .system .pill[hidden] { display: none; }
 .system #sysBtn { background: var(--accent-soft); border-color: hsl(var(--hue) 90% 66% / 0.45); }
 select:disabled, .switch:has(input:disabled) { opacity: 0.4; pointer-events: none; }
+
+/* ───────── Hardening against worst-case text ─────────
+ * Found by feeding the window realistic extremes (app/dev-fixtures.js): 40-character sound
+ * names, unbreakable file names, the longest hotkey, raw error text, 150 pads, a short window. */
+
+/* The left column never squeezes its rows into each other; if the window is short it scrolls. */
+.hero { overflow-y: auto; overflow-x: hidden; }
+.hero::-webkit-scrollbar { width: 0; }
+.hero > * { flex: none; }
+.status {
+  max-width: 100%; padding: 0 8px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+@media (max-height: 800px) { .hint { display: none; } } /* the explainer yields first */
+
+/* Pads: two lines for the name, the key as a small corner badge that never eats the name. */
+.pads { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); max-height: 248px; overflow-y: auto; padding: 2px; margin: 12px -2px -2px; }
+.pads::-webkit-scrollbar { width: 6px; }
+.pads::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 3px; }
+.pad { position: relative; height: 54px; padding: 6px 10px; display: flex; align-items: center; justify-content: center; white-space: normal; text-align: center; line-height: 1.25; }
+.pad-name { min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.pad kbd { position: absolute; top: 4px; left: 5px; min-width: 0; margin: 0; padding: 0 4px; font-size: 10px; line-height: 1.5; border-radius: 4px; }
+.pad:has(kbd) .pad-name { padding-top: 9px; -webkit-line-clamp: 2; }
+
+.soundboard-head { flex-wrap: wrap; row-gap: 8px; }
+.soundboard-head b { white-space: nowrap; }
+
+/* Catalogue rows: the title yields, the numbers and the button never do. */
+.catalog-row { grid-template-columns: 34px minmax(0, 1fr) auto auto; }
+.catalog-meta, .catalog-row .pill { flex: none; white-space: nowrap; }
+.catalog-head { flex-wrap: wrap; }
+.catalog-head input { flex: 1 1 180px; }
+
+/* Hotkey fields: the combination truncates, the explanation has a line of its own. */
+.key-note { display: block; min-height: 16px; margin-top: 4px; font-size: 11.5px; color: #ff6961; }
+.system small { overflow-wrap: anywhere; }
+.route { overflow-wrap: anywhere; }
+
+/* Enlarged text or a very narrow window: one column that scrolls, instead of a clipped second one. */
+@media (max-width: 880px) {
+  body { overflow: auto; }
+  main { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 100%; }
+  .hero { overflow: visible; }
+  .controls { min-width: 0; }
+  .page { overflow: visible; }
+  .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); align-self: stretch; }
+  .presets { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .sliders, .toggles { grid-template-columns: minmax(0, 1fr); }
+  .switch + .switch { border-left: 0; border-top: 1px solid var(--glass-edge); }
+  .devices { grid-template-columns: minmax(0, 1fr); }
+  .field, .field.gain { grid-column: auto; }
+}

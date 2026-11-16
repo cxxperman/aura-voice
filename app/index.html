@@ -119,8 +119,8 @@
           <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 30 мс</option></select></label>
           <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
           <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
-          <div class="field gain"><span>Клавиша: обработка голоса</span><button type="button" class="hotkey" id="key-power"></button></div>
-          <div class="field gain"><span>Клавиша: заглушить микрофон</span><button type="button" class="hotkey" id="key-mute"></button></div>
+          <div class="field gain"><span>Клавиша: обработка голоса</span><button type="button" class="hotkey" id="key-power"></button><small class="key-note" id="note-power" role="status"></small></div>
+          <div class="field gain"><span>Клавиша: заглушить микрофон</span><button type="button" class="hotkey" id="key-mute"></button><small class="key-note" id="note-mute" role="status"></small></div>
           <p class="route" id="route"></p>
         </div>
       </div>

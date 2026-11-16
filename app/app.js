@@ -2,6 +2,8 @@ const $ = (s) => document.querySelector(s);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const TEST = new URLSearchParams(location.search).has('test');
 const PROBE = new URLSearchParams(location.search).has('probe');
+const DATA = new URLSearchParams(location.search).get('data'); // dev only: worst-case fixtures, see dev-fixtures.js
+let fixture = null;
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const PARAMS = [
@@ -68,7 +70,7 @@ function loadState() {
 const state = loadState();
 if (TEST || PROBE) state.on = true;
 const save = () => {
-  if (!TEST && !PROBE) localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  if (!TEST && !PROBE && !DATA) localStorage.setItem(STORE_KEY, JSON.stringify(state));
 };
 
 const engine = new Engine();
@@ -217,6 +219,7 @@ $('#sysAlt').addEventListener('click', () => runSetup('uninstall'));
 const statusEl = $('#status');
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
+  statusEl.title = text; // the line is clamped; the tooltip always has all of it
   statusEl.classList.toggle('error', isError);
 }
 // What the optional stages cost: each one has to look a little way ahead.
@@ -233,6 +236,16 @@ function liveStatus() {
   if (sys.installed) return setStatus(sys.alive ? `В эфире · встроено в микрофон, ${latencyText()}` : 'В эфире · жду ответа модуля…');
   const ms = Math.round((c.baseLatency + (c.outputLatency || 0)) * 1000 + 12);
   setStatus(`В эфире · задержка около ${ms} мс`);
+}
+
+// What went wrong, in words a person can act on — never a raw exception.
+function friendlyError(err) {
+  const known = {
+    NotReadableError: 'Микрофон занят другой программой или отключён.',
+    AbortError: 'Windows не дала открыть микрофон. Попробуйте ещё раз.',
+    OverconstrainedError: 'Этот микрофон не поддерживает нужный режим. Выберите другой в настройках.',
+  };
+  return known[err?.name] || `Не удалось запустить звук: ${String(err?.message || err).slice(0, 110)}`;
 }
 
 /* ───────── Power ───────── */
@@ -258,7 +271,7 @@ async function setPower(on) {
     state.on = false;
     const denied = err?.name === 'NotAllowedError' || err?.name === 'NotFoundError';
     startFailed = sys.installed && !denied;
-    setStatus(startFailed ? 'Микрофон не открывается: Windows не смогла запустить модуль Aura.' : denied ? 'Нет доступа к микрофону. Проверьте, что он подключён и разрешён в Windows.' : `Не удалось запустить звук: ${err?.message || err}`, true);
+    setStatus(startFailed ? 'Микрофон не открывается: Windows не смогла запустить модуль Aura.' : denied ? 'Нет доступа к микрофону. Проверьте, что он подключён и разрешён в Windows.' : friendlyError(err), true);
   }
   busy = false;
   save();
@@ -434,10 +447,11 @@ const cleanLabel = (d) => d.label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i,
 function fillSelect(el, items, selected, firstLabel) {
   el.replaceChildren(new Option(firstLabel, ''), ...items.map((d) => new Option(cleanLabel(d), d.deviceId)));
   el.value = items.some((d) => d.deviceId === selected) ? selected : '';
+  el.title = el.selectedOptions[0]?.textContent || '';
 }
 
 async function refreshDevices() {
-  devices = (await navigator.mediaDevices.enumerateDevices()).filter(real);
+  devices = fixture ? fixture.devices() : (await navigator.mediaDevices.enumerateDevices()).filter(real);
   const inputs = devices.filter((d) => d.kind === 'audioinput');
   const outputs = devices.filter((d) => d.kind === 'audiooutput');
 
@@ -492,6 +506,10 @@ $('#monitorId').addEventListener('change', async (e) => {
   engine.apply(state);
 });
 navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
+
+document.addEventListener('change', (e) => {
+  if (e.target.tagName === 'SELECT') e.target.title = e.target.selectedOptions[0]?.textContent || '';
+});
 
 /* ───────── Compare (hold) ───────── */
 const compareBtn = $('#compare');
@@ -556,7 +574,12 @@ const padSources = new Set(); // everything currently playing to the user's ears
 
 // The key shown on a pad: its own, or Ctrl+Alt+digit for the first nine.
 const padKey = (pad, index) => pad.key || (index < 9 ? `Ctrl+Alt+${index + 1}` : '');
-const shortKey = (accel) => accel.replace('Ctrl+', '⌃').replace('Alt+', '⌥').replace('Shift+', '⇧');
+// On the pad itself only the final key fits; the full combination is in the tooltip and the menu.
+const KEY_NAMES = { PageDown: 'PgDn', PageUp: 'PgUp', Insert: 'Ins', Space: '␣', Left: '←', Right: '→', Up: '↑', Down: '↓' };
+const shortKey = (accel) => {
+  const key = accel.split('+').pop();
+  return KEY_NAMES[key] || key.replace(/^num/, 'Num');
+};
 
 let dragFrom = -1;
 function renderPads() {
@@ -572,8 +595,12 @@ function renderPads() {
         key.classList.toggle('failed', hotkeyFailed.has(accel));
         b.append(key);
       }
-      b.append(pad.name);
-      b.title = `${pad.name}${accel ? ' · ' + accel : ''} — правый клик: имя, клавиша, удаление; перетащите, чтобы переставить`;
+      const label = document.createElement('span');
+      label.className = 'pad-name';
+      label.dir = 'auto';
+      label.textContent = pad.name;
+      b.append(label);
+      b.title = `${pad.name}${accel ? ' · ' + accel : ''}${hotkeyFailed.has(accel) ? ' (занята другой программой)' : ''} — правый клик: имя, клавиша, удаление; перетащите, чтобы переставить`;
       b.addEventListener('click', () => playPad(pad));
       b.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -844,7 +871,7 @@ addEventListener(
 async function syncHotkeys() {
   if (!window.auraSystem?.setHotkeys || TEST) return;
   const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null) });
-  hotkeyFailed = new Set(failed || []);
+  hotkeyFailed = new Set(fixture ? fixture.failedHotkeys : failed || []);
   renderHotkeys();
   renderPads();
 }
@@ -852,8 +879,11 @@ function renderHotkeys() {
   for (const id of ['power', 'mute']) {
     const accel = state.hotkeys[id];
     const button = $(`#key-${id}`);
-    button.textContent = accel ? (hotkeyFailed.has(accel) ? `${accel} — занято другой программой` : accel) : 'Не задана';
-    button.classList.toggle('failed', hotkeyFailed.has(accel));
+    const failed = hotkeyFailed.has(accel);
+    button.textContent = accel || 'Не задана';
+    button.title = accel || '';
+    button.classList.toggle('failed', failed);
+    $(`#note-${id}`).textContent = failed ? 'Занята другой программой — выберите другую' : '';
   }
   $('#muteKey').textContent = state.hotkeys.mute ? ` · ${state.hotkeys.mute}` : '';
 }
@@ -876,11 +906,12 @@ for (const id of ['power', 'mute']) {
 let captureDevices = [];
 async function loadCaptureDevices() {
   if (!window.auraSystem?.captureDevices || TEST) return;
-  captureDevices = (await window.auraSystem.captureDevices()) || [];
+  captureDevices = fixture ? fixture.captureDevices : (await window.auraSystem.captureDevices()) || [];
   const select = $('#sysDevice');
   select.replaceChildren(...captureDevices.map((d) => new Option(d.name, d.guid)));
   const current = captureDevices.find((d) => d.current);
   if (current) select.value = current.guid;
+  select.title = select.selectedOptions[0]?.textContent || '';
   renderSystem();
 }
 $('#sysDevice').addEventListener('change', () => renderSystem());
@@ -906,6 +937,9 @@ $('#guide1').addEventListener('click', () => showTab('setup'));
  * hear the preview), then one click puts the sound on a pad. */
 const catalog = { feed: 'popular', query: '', items: [], total: 0, loading: false, started: false, previewing: null };
 const catalogList = $('#catalogList');
+const compact = new Intl.NumberFormat('ru', { notation: 'compact', maximumFractionDigits: 1 });
+const formatCount = (n) => (Number.isFinite(n) && n >= 0 ? compact.format(n) : '0'); // 1340327 → «1,3 млн»
+const formatDuration = (s) => (!(s >= 1) ? '<1 с' : s < 60 ? `${Math.round(s)} с` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`);
 const catalogNote = (text) => ($('#catalogNote').textContent = text);
 
 async function loadCatalog(reset) {
@@ -913,7 +947,7 @@ async function loadCatalog(reset) {
   catalog.loading = true;
   if (reset) catalog.items = [];
   catalogNote('Загружаю…');
-  const res = await window.auraSystem.catalog({ feed: catalog.feed, query: catalog.query, offset: catalog.items.length }).catch((err) => {
+  const res = await (fixture ? Promise.resolve(fixture.catalog(catalog)) : window.auraSystem.catalog({ feed: catalog.feed, query: catalog.query, offset: catalog.items.length })).catch((err) => {
     console.error('catalog failed:', err?.message);
     return null;
   });
@@ -942,10 +976,12 @@ function renderCatalog() {
       play.addEventListener('click', () => previewSound(item));
       const title = document.createElement('span');
       title.className = 'catalog-title';
-      title.textContent = item.title;
+      title.textContent = item.title.trim() || 'Без названия';
+      title.title = title.textContent;
+      title.dir = 'auto';
       const meta = document.createElement('span');
       meta.className = 'catalog-meta';
-      meta.textContent = [item.explicit ? '18+' : '', item.loud ? 'громкий' : '', `${item.duration} с`, `♥ ${item.likes}`].filter(Boolean).join(' · ');
+      meta.textContent = [item.explicit ? '18+' : '', item.loud ? 'громкий' : '', formatDuration(item.duration), `♥ ${formatCount(item.likes)}`].filter(Boolean).join(' · ');
       const add = document.createElement('button');
       add.type = 'button';
       add.className = 'pill small';
@@ -1129,9 +1165,11 @@ const dbLabel = (db) => (db < -70 ? '—' : `${Math.round(db)} дБ`);
 // Levels reported by the module, refreshed a few times a second while it is in use.
 let moduleLevels = null;
 setInterval(async () => {
+  if (fixture?.levels) return (moduleLevels = fixture.levels), renderEngine();
   if (!sys.installed || !engine.running || TEST || document.hidden) return (moduleLevels = null);
   const l = await window.auraSystem.levels();
   moduleLevels = l && Number.isFinite(l.in) ? l : null;
+  if (fixture?.levels) moduleLevels = fixture.levels;
   renderEngine();
 }, 130);
 
@@ -1266,6 +1304,21 @@ function drawOrb() {
 
 /* ───────── Boot ───────── */
 async function boot() {
+  if (DATA) {
+    // Dev only: swap everything that comes from outside for a fixture, at the same boundaries.
+    await new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = 'dev-fixtures.js';
+      script.onload = script.onerror = resolve;
+      document.head.append(script);
+    });
+    fixture = window.devFixture || null;
+    if (fixture) {
+      state.pads = fixture.pads;
+      if (fixture.hotkeys) state.hotkeys = fixture.hotkeys;
+      if (fixture.sysMessage) sysMessage = fixture.sysMessage;
+    }
+  }
   $('#mute').disabled = true; // until the module is known to be installed
   renderEngine();
   renderPads();
@@ -1304,6 +1357,7 @@ async function boot() {
     }
   });
   if (state.on) await setPower(true);
+  if (fixture?.status) setStatus(fixture.status, true);
 
   if (TEST) {
     setTimeout(() => {

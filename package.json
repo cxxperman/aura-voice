@@ -1,7 +1,7 @@
 {
   "name": "aura-voice",
   "productName": "Aura",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Студийная обработка голоса с микрофона в реальном времени",
   "main": "main.js",
   "scripts": {
@@ -21,7 +21,8 @@
       "main.js",
       "preload.js",
       "app/**",
-      "assets/**"
+      "assets/**",
+      "!app/dev-fixtures.js"
     ],
     "extraResources": [
       {

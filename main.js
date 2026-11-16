@@ -10,6 +10,9 @@ const testMode = process.argv.includes('--test');
 const probeMode = process.argv.includes('--probe'); // dev: switch on for one run without saving
 const devRun = !!shotArg || testMode || probeMode;
 const tabArg = process.argv.find((a) => a.startsWith('--tab=')); // dev: open on a given page
+const dataArg = process.argv.find((a) => a.startsWith('--data=')); // dev: worst-case fixtures (app/dev-fixtures.js)
+const sizeArg = process.argv.find((a) => a.startsWith('--size=')); // dev: WIDTHxHEIGHT
+const zoomArg = process.argv.find((a) => a.startsWith('--zoom='));
 const clickSelector = process.env.AURA_CLICK; // dev: click this selector partway through a --shot run
 const startHidden = process.argv.includes('--hidden'); // launched with Windows: straight to the tray
 const asset = (name) => path.join(__dirname, 'assets', name);
@@ -53,8 +56,15 @@ function createWindow() {
   });
 
   win.removeMenu();
+  if (devRun && sizeArg) {
+    const [w, h] = sizeArg.slice('--size='.length).split('x').map(Number);
+    win.setMinimumSize(300, 300);
+    win.setContentSize(w, h);
+  }
+  // Chromium remembers the zoom per profile, so dev runs always set it — back to 1 unless asked otherwise.
+  if (devRun) win.webContents.once('did-finish-load', () => win.webContents.setZoomFactor(zoomArg ? Number(zoomArg.slice('--zoom='.length)) : 1));
   win.loadFile(path.join(__dirname, 'app', 'index.html'), {
-    query: { ...(testMode ? { test: '1' } : probeMode ? { probe: '1' } : {}), ...(tabArg ? { tab: tabArg.slice('--tab='.length) } : {}) },
+    query: { ...(testMode ? { test: '1' } : probeMode ? { probe: '1' } : {}), ...(tabArg ? { tab: tabArg.slice('--tab='.length) } : {}), ...(devRun && dataArg ? { data: dataArg.slice('--data='.length) } : {}) },
   });
   win.once('ready-to-show', () => {
     if (!startHidden && !shotArg) win.show();
@@ -199,7 +209,7 @@ ipcMain.handle('uwu:list', async (_e, q) => {
         id: Number(s.id),
         file: Number(s.original_id || s.id), // re-uploads point at the original file
         ext: String(s.extension || 'mp3').toLowerCase(),
-        title: String(s.title || 'Без названия').slice(0, 80),
+        title: (String(s.title || '').trim() || 'Без названия').slice(0, 80),
         duration: Math.round(Number(s.duration) || 0),
         likes: Number(s.likes) || 0,
         explicit: !!s.is_explicit,
@@ -238,7 +248,7 @@ ipcMain.handle('uwu:add', async (_e, item) => {
     fs.mkdirSync(soundsDir(), { recursive: true });
     const id = `${crypto.randomUUID()}.${item.ext}`;
     fs.writeFileSync(path.join(soundsDir(), id), bytes);
-    return { id, name: String(item.title || 'Звук').slice(0, 40), source: `uwu:${Number(item.id)}` };
+    return { id, name: (String(item.title || '').trim() || 'Звук').slice(0, 40), source: `uwu:${Number(item.id)}` };
   } catch {
     return null;
   }
