@@ -5,6 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('auraSystem', {
   status: () => ipcRenderer.invoke('system:status'),
   levels: () => ipcRenderer.invoke('system:levels'),
+  resetDeep: () => ipcRenderer.invoke('system:reset-deep'),
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
   importPreset: () => ipcRenderer.invoke('preset:import'),
   write: (text) => ipcRenderer.invoke('system:write', text),

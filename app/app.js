@@ -41,6 +41,7 @@ const DEFAULTS = {
   g: { ns: 0, pop: 50, clean: 45, dereverb: 0 },
   custom: null,
   mute: false,
+  nsEngine: 0, // 0 = fast (RNNoise), 1 = high quality (DeepFilterNet)
   monitor: false,
   inputId: '',
   outputId: undefined, // undefined = never chosen → auto-detect a virtual cable
@@ -90,6 +91,7 @@ function pushSystem() {
       `auto=${state.auto ? 1 : 0}`,
       `clean=${state.g.clean}`, // after the preset values: the last one wins
       `ns=${state.g.ns}`,
+      `nsengine=${state.nsEngine}`,
       `pop=${state.g.pop}`,
       `dereverb=${state.g.dereverb}`,
       `mute=${state.mute ? 1 : 0}`,
@@ -197,7 +199,8 @@ function setStatus(text, isError = false) {
 }
 // What the optional stages cost: each one has to look a little way ahead.
 function latencyText() {
-  const ms = (state.g.ns > 0 ? 10 : 0) + (state.g.dereverb > 0 ? 11 : 0) + (state.v.pitch ? 22 : 0);
+  const deep = state.nsEngine === 1 && moduleLevels?.engine === 1;
+  const ms = (state.g.ns > 0 ? (deep ? 40 : 10) : 0) + (state.g.dereverb > 0 ? 11 : 0) + (state.v.pitch ? 22 : 0);
   return ms ? `задержка около ${ms} мс` : 'без задержки';
 }
 function liveStatus() {
@@ -521,6 +524,22 @@ sampleBtn.addEventListener('click', async () => {
   liveStatus();
 });
 
+/* ───────── Noise-suppression engine ───────── */
+const engineSelect = $('#nsEngine');
+function renderEngine() {
+  const deep = moduleLevels?.deep; // 1 = available, -1 = switched off after a crash, 0/undefined = not there
+  engineSelect.disabled = !sys.installed || !deep;
+  engineSelect.options[1].textContent = deep === -1 ? 'Качественный — отключён после сбоя, выберите, чтобы попробовать снова' : 'Качественный — DeepFilterNet, 40 мс';
+  engineSelect.value = String(state.nsEngine);
+}
+engineSelect.addEventListener('change', async () => {
+  state.nsEngine = Number(engineSelect.value);
+  if (state.nsEngine === 1) await window.auraSystem.resetDeep(); // an explicit choice clears an old crash mark
+  save();
+  pushSystem();
+  setTimeout(liveStatus, 1500); // the module needs a moment to load the model
+});
+
 /* ───────── Auto-setup ─────────
  * Listens to the room, then to the voice, and sets input gain, the gate and noise suppression from what it heard. */
 const tuneBtn = $('#tune');
@@ -597,6 +616,7 @@ setInterval(async () => {
   if (!sys.installed || !engine.running || TEST || document.hidden) return (moduleLevels = null);
   const l = await window.auraSystem.levels();
   moduleLevels = l && Number.isFinite(l.in) ? l : null;
+  renderEngine();
 }, 130);
 
 let lastText = 0;
@@ -698,6 +718,7 @@ function drawOrb() {
 /* ───────── Boot ───────── */
 async function boot() {
   $('#mute').disabled = true; // until the module is known to be installed
+  renderEngine();
   renderPreset();
   renderSliders();
   renderPower();

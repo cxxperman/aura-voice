@@ -62,6 +62,7 @@
         <label class="field"><span>Микрофон</span><select id="inputId"></select></label>
         <label class="field"><span>Выход в приложения</span><select id="outputId"></select></label>
         <label class="field"><span>Наушники</span><select id="monitorId"></select></label>
+        <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 40 мс</option></select></label>
         <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
         <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
         <p class="route" id="route"></p>

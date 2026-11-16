@@ -202,6 +202,14 @@ function checkAttached() {
   });
 }
 
+// Picking the high-quality engine again clears the "it crashed last time" marker the module leaves behind.
+ipcMain.handle('system:reset-deep', () => {
+  try {
+    fs.rmSync(path.join(dataDir, 'deep.loading'), { force: true });
+  } catch {}
+  return true;
+});
+
 ipcMain.handle('system:status', () => {
   const status = {
     available: fs.existsSync(path.join(binDir, 'AuraSetup.exe')) && fs.existsSync(path.join(binDir, 'AuraAPO.dll')),
