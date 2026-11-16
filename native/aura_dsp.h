@@ -136,10 +136,15 @@ struct Dynamics {
     const float a = std::fabs(x);
     env = std::max(a, env * envRel);
 
-    // Gate: open fast, hold through the gaps between words, close softly to a floor.
-    if (env > thr) { open = true; hold = holdN; }
-    else if (env < thr * 0.63f) { if (hold > 0) hold -= 1; else open = false; }
-    const float tg = open ? 1.0f : 0.03f;
+    // Downward expander rather than a gate: a hard gate chops the quiet starts and ends of words
+    // (f, s, h, trailing vowels) the moment they dip under the threshold. Here sound just under
+    // the threshold is only a little quieter, and it takes 10 dB under to reach the -30 dB floor.
+    // Opens fast, holds through the gaps between words.
+    float tg = 1.0f;
+    if (env >= thr) hold = holdN;
+    else if (hold > 0) hold -= 1;
+    else { const float r = env / thr; tg = std::max(0.03f, r * r * r); }
+    open = tg > 0.5f;
     g += (tg - g) * (tg > g ? gAtt : gRel);
 
     // Auto-level: ride slowly towards -20 dBFS RMS, only while there is speech.

@@ -1698,8 +1698,10 @@ tuneBtn.addEventListener('click', async () => {
   // noise suppression from how far the voice stands above the noise.
   const gain = clamp(Math.round(-26 - speech), -12, 18);
   const snr = speech - noise;
-  state.g.clean = clamp(Math.round((noise + gain + 16 + 65) / 0.4), 10, 80);
-  state.g.ns = snr > 45 ? 30 : snr > 30 ? 55 : 75;
+  // The neural denoiser does the cleaning; the pause threshold only has to sit a little above the
+  // room. Set high, it eats the quiet starts and ends of words — that is heard as a torn voice.
+  state.g.clean = clamp(Math.round((noise + gain + 8 + 65) / 0.4), 5, 70);
+  state.g.ns = snr > 45 ? 25 : snr > 30 ? 40 : 60;
   state.auto = true;
   $('#auto').checked = true;
   renderSliders();

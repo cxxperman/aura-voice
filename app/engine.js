@@ -123,10 +123,11 @@ class VoiceDynamics extends AudioWorkletProcessor {
       const a = Math.abs(x);
       this.env = Math.max(a, this.env * envRel);
 
-      // Gate: open fast, hold through pauses between words, close softly to a floor.
-      if (this.env > thr) { this.open = true; this.hold = holdN; }
-      else if (this.env < thrClose) { if (this.hold > 0) this.hold--; else this.open = false; }
-      const tg = this.open ? 1 : floor;
+      // A downward expander, as in the module: just under the threshold is only a little quieter.
+      let tg = 1;
+      if (this.env >= thr) this.hold = holdN;
+      else if (this.hold > 0) this.hold--;
+      else { const r = this.env / thr; tg = Math.max(floor, r * r * r); }
       this.g += (tg - this.g) * (tg > this.g ? gAtt : gRel);
 
       // Auto-level: ride slowly towards -20 dBFS RMS so a quiet mic still sounds full.
