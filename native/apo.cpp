@@ -27,7 +27,7 @@ std::atomic<long> gObjects{0};
 // ───── Live settings: written by the watcher thread, read by the real-time thread ─────
 
 constexpr int kMic = aura::Params::kMicBands;
-constexpr int kFixed = 35; // the scalar settings; the equalizer bands follow them
+constexpr int kFixed = 38; // the scalar settings; the equalizer bands follow them
 constexpr int kValues = kFixed + 3 * kMic;
 
 struct Live {
@@ -58,7 +58,7 @@ void store(const aura::Settings& s) {
                                  p.deess, p.autoLevel, p.inGainDb, p.outGainDb, p.pop, s.nsStrength,
                                  p.pitch, s.dereverb, p.fxPitch, p.fxRingHz, p.fxRingMix, p.fxEchoMs, p.fxEchoFb,
                                  p.fxEchoMix, p.fxPhone, p.fxDrive, p.fxTremHz, p.fxTremDepth, p.fxLowpassHz, p.fxSpace,
-                                 p.fxNatural, p.fxFormant, p.micHp, p.excite, p.multiband, p.satLow, p.dehum, p.loudTarget};
+                                 p.fxNatural, p.fxFormant, p.micHp, p.excite, p.multiband, p.satLow, p.dehum, p.loudTarget, p.fxChorus, p.fxCrush, p.fxMutate};
   for (int i = 0; i < kFixed; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
   for (int i = 0; i < kMic; i++) {
     gLive.v[kFixed + 3 * i].store(p.micF[i], std::memory_order_relaxed);
@@ -80,7 +80,7 @@ aura::Settings load() {
                             &p.deess, &p.autoLevel, &p.inGainDb, &p.outGainDb, &p.pop, &s.nsStrength,
                             &p.pitch, &s.dereverb, &p.fxPitch, &p.fxRingHz, &p.fxRingMix, &p.fxEchoMs, &p.fxEchoFb,
                             &p.fxEchoMix, &p.fxPhone, &p.fxDrive, &p.fxTremHz, &p.fxTremDepth, &p.fxLowpassHz, &p.fxSpace,
-                            &p.fxNatural, &p.fxFormant, &p.micHp, &p.excite, &p.multiband, &p.satLow, &p.dehum, &p.loudTarget};
+                            &p.fxNatural, &p.fxFormant, &p.micHp, &p.excite, &p.multiband, &p.satLow, &p.dehum, &p.loudTarget, &p.fxChorus, &p.fxCrush, &p.fxMutate};
   for (int i = 0; i < kFixed; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
   for (int i = 0; i < kMic; i++) {
     p.micF[i] = gLive.v[kFixed + 3 * i].load(std::memory_order_relaxed);

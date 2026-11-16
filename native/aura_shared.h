@@ -79,6 +79,9 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
     else if (key == "fxtremdepth") s.params.fxTremDepth = clamp(v / 100, 0, 1);
     else if (key == "fxlp") s.params.fxLowpassHz = clamp(v, 0, 8000);
     else if (key == "fxspace") s.params.fxSpace = clamp(v / 100, 0, 1);
+    else if (key == "fxchorus") s.params.fxChorus = clamp(v / 100, 0, 1);
+    else if (key == "fxcrush") s.params.fxCrush = clamp(v / 100, 0, 1);
+    else if (key == "fxmutate") s.params.fxMutate = clamp(v / 100, 0, 1);
     else if (key == "fxnatural") s.params.fxNatural = v > 0.5 ? 1.0f : 0.0f;
     else if (key == "fxformant") s.params.fxFormant = clamp(v, -5, 5);
     else if (key == "michp") s.params.micHp = clamp(v, 40, 200);

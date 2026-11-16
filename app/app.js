@@ -362,7 +362,7 @@ function latencyText() {
   const deep = state.nsEngine === 1 && moduleLevels?.engine === 1;
   const fx = fxValues();
   const shifted = (state.v.pitch || 0) + fx.fxpitch !== 0 || (fx.fxnatural && fx.fxformant !== 0);
-  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (shifted ? 36 : 0);
+  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (shifted ? 25 : 0);
   return ms ? `задержка около ${ms} мс` : 'без задержки';
 }
 function liveStatus() {
@@ -1230,7 +1230,7 @@ $('#padStop').addEventListener('click', () => {
  * One tap changes who you sound like. These sit on top of the character and the sliders, and
  * live in the module, so every program hears them. Values are the module's own units.
  * `fxnatural` = move the pitch but keep the timbre: a different person, not a cartoon. */
-const FX_ZERO = { fxpitch: 0, fxnatural: 0, fxformant: 0, fxring: 0, fxringmix: 0, fxecho: 0, fxechofb: 0, fxechomix: 0, fxphone: 0, fxdrive: 0, fxtrem: 0, fxtremdepth: 0, fxlp: 0, fxspace: 0 };
+const FX_ZERO = { fxpitch: 0, fxnatural: 0, fxformant: 0, fxring: 0, fxringmix: 0, fxecho: 0, fxechofb: 0, fxechomix: 0, fxphone: 0, fxdrive: 0, fxtrem: 0, fxtremdepth: 0, fxlp: 0, fxspace: 0, fxchorus: 0, fxcrush: 0, fxmutate: 0 };
 // Line symbols in the manner of SF Symbols, drawn on a 24-unit grid; each voice shows one in white
 // on a rounded square of a system colour, the way iOS Settings marks its rows.
 const SYMBOLS = {
@@ -1256,9 +1256,9 @@ const SYMBOLS = {
 };
 const VOICES = {
   none: { name: 'Обычный голос', hint: 'Без эффекта', icon: 'mic', color: '#8e8e93', p: {} },
-  girl: { name: 'Девушка', hint: 'Выше, тембр почти свой', icon: 'person', color: '#ff375f', p: { fxpitch: 5, fxnatural: 1, fxformant: 1.5 } },
-  guy: { name: 'Парень', hint: 'Ниже, тембр почти свой', icon: 'person', color: '#0a84ff', p: { fxpitch: -4, fxnatural: 1, fxformant: -1.5 } },
-  kid: { name: 'Ребёнок', hint: 'Высокий и маленький', icon: 'child', color: '#ff9f0a', p: { fxpitch: 8, fxnatural: 1, fxformant: 3 } },
+  girl: { name: 'Девушка', hint: 'Выше и легче тембром', icon: 'person', color: '#ff375f', p: { fxpitch: 5, fxnatural: 1, fxformant: 2.8 } },
+  guy: { name: 'Парень', hint: 'Ниже и плотнее тембром', icon: 'person', color: '#0a84ff', p: { fxpitch: -4, fxnatural: 1, fxformant: -2.4 } },
+  kid: { name: 'Ребёнок', hint: 'Высокий и маленький', icon: 'child', color: '#ff9f0a', p: { fxpitch: 8, fxnatural: 1, fxformant: 4 } },
   higher: { name: 'Выше', hint: 'Тот же человек, тоньше', icon: 'up', color: '#30b0c7', p: { fxpitch: 3, fxnatural: 1 } },
   lower: { name: 'Ниже', hint: 'Тот же человек, глубже', icon: 'down', color: '#5e5ce6', p: { fxpitch: -3, fxnatural: 1 } },
   helium: { name: 'Гелий', hint: 'Как после шарика', icon: 'balloon', color: '#ff453a', p: { fxpitch: 7 } },
@@ -1274,6 +1274,11 @@ const VOICES = {
   hall: { name: 'Собор', hint: 'Большой гулкий зал', icon: 'columns', color: '#af52de', p: { fxspace: 100 } },
   underwater: { name: 'Под водой', hint: 'Глухо и с бульканьем', icon: 'waves', color: '#32ade6', p: { fxlp: 600, fxtrem: 5, fxtremdepth: 50 } },
   shaky: { name: 'Дрожащий', hint: 'Голос трясётся', icon: 'pulse', color: '#00c7be', p: { fxtrem: 8, fxtremdepth: 70 } },
+  chorus: { name: 'Хор', hint: 'Вас становится несколько', icon: 'waves', color: '#5ac8fa', p: { fxchorus: 55 } },
+  clone: { name: 'Клоны', hint: 'Толпа одинаковых голосов', icon: 'person', color: '#bf5af2', p: { fxchorus: 100, fxecho: 45, fxechofb: 10, fxechomix: 25 } },
+  atari: { name: 'Приставка', hint: 'Восемь бит, как в старой игре', icon: 'cpu', color: '#ff9f0a', p: { fxcrush: 70 } },
+  mutant: { name: 'Мутант', hint: 'Высота скачет сама', icon: 'pulse', color: '#30d158', p: { fxmutate: 100 } },
+  ghost: { name: 'Призрак', hint: 'Глухой, далёкий, с эхом', icon: 'cave', color: '#8e8e93', p: { fxpitch: -2, fxlp: 2200, fxecho: 180, fxechofb: 55, fxechomix: 50, fxspace: 90, fxchorus: 40 } },
   custom: { name: 'Свой', hint: 'Соберите из ручек ниже', icon: 'sliders', color: '#ffcc00', p: null },
 };
 // The knobs of the user's own voice, in plain words; customFx() turns them into module values.

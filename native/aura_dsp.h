@@ -54,6 +54,9 @@ struct Params {
   float fxSpace = 0;      // extra room, added to `space`
   float fxNatural = 0;    // 1 = shift the pitch but keep the timbre (NaturalShifter), for "another person" voices
   float fxFormant = 0;    // semitones the timbre itself is moved by, natural mode only
+  float fxChorus = 0;     // 0..1 copies of the voice a few ms apart, drifting: chorus → clones
+  float fxCrush = 0;      // 0..1 fewer bits and a lower sample rate: an old games console
+  float fxMutate = 0;     // 0..1 the pitch jumps to a new random place a few times a second
 
   // Microphone profile: a corrective EQ for the capsule itself, ahead of everything else, so the
   // character presets start from a flat, clean microphone. The same bank carries the user's own
@@ -315,10 +318,10 @@ class NaturalShifter {
  public:
   void prepare(float sr) {
     minPeriod_ = int(sr / 400.0f);
-    maxPeriod_ = int(sr / 80.0f);
-    latency_ = int(float(maxPeriod_) * 2.9f) + 8;
+    maxPeriod_ = int(sr / 85.0f);
+    latency_ = int(float(maxPeriod_ + 6) * 2.0f) + 8;
     size_ = 1;
-    while (size_ < latency_ * 4) size_ <<= 1;
+    while (size_ < int(float(maxPeriod_ + 6) * 2.4f) * 4) size_ <<= 1;
     in_.assign(size_t(size_), 0.0f);
     out_.assign(size_t(size_), 0.0f);
     score_.assign(size_t(maxPeriod_ / 2 + 2), 0.0f);
@@ -328,12 +331,22 @@ class NaturalShifter {
   }
   int latency() const { return latency_; }
   float period() const { return period_; }
+  // The wait is one period plus the length of a grain's source, and that source is as long as the
+  // timbre shift makes it: (1 + formant ratio) periods of the lowest voice. Set when the voice
+  // changes; what was in flight is dropped, which costs a few milliseconds of silence.
+  void configure(float formantRatio) {
+    const int need = int(float(maxPeriod_ + 6) * (1.0f + std::min(formantRatio, 1.34f))) + 8;
+    if (need == latency_) return;
+    latency_ = need;
+    std::fill(out_.begin(), out_.end(), 0.0f);
+    synth_ = source_ = double(n_);
+  }
 
   inline float process(float x, float pitchRatio, float formantRatio) {
     in_[size_t(n_ & (size_ - 1))] = x;
     if ((n_ & 255) == 255) measure();
     // Lay down every grain whose source audio has fully arrived.
-    while (synth_ + double(period_) * (0.5 + formantRatio) + 2.0 <= double(n_)) grain(pitchRatio, formantRatio);
+    while (synth_ + double(period_) * formantRatio + 2.0 <= double(n_)) grain(pitchRatio, formantRatio);
     const int64_t m = n_ - latency_;
     float y = 0;
     if (m >= 0) {
@@ -349,8 +362,18 @@ class NaturalShifter {
     const double P = period_;
     // Take the grain a whole number of periods after the previous one, as close to "now" as that
     // allows: repeating a period raises the pitch, skipping one lowers it, and the phase stays intact.
-    const double k = std::max(0.0, std::floor((synth_ - source_) / P + 0.5));
+    // (Always the last whole period at or before the output point, never the nearer one ahead of
+    // it: that half period of waiting was a third of the shifter's delay.)
+    const double k = std::max(0.0, std::floor((synth_ - source_) / P));
     source_ += k * P;
+    // In breath and consonants there is no period. Repeating one stretch of noise at a steady
+    // interval would give it a pitch — the buzz pitch shifters are known for — so there the grain
+    // is taken from a random place within the last period instead.
+    double from = source_;
+    if (!voiced_) {
+      seed_ = seed_ * 1664525u + 1013904223u;
+      from -= P * double(seed_ >> 8) / 16777216.0;
+    }
     const int half = int(P);
     const float gain = 1.0f / std::max(pitchRatio, 0.5f); // grains overlap pitchRatio-fold
     const int64_t centre = int64_t(synth_ + 0.5);
@@ -358,7 +381,7 @@ class NaturalShifter {
       const int64_t at = centre + i;
       if (at <= n_ - latency_) continue; // already played: never write into the past
       const float w = 0.5f + 0.5f * std::cos(kPi * float(i) / float(half));
-      out_[size_t(at & (size_ - 1))] += sample(source_ + double(i) * formantRatio) * w * gain;
+      out_[size_t(at & (size_ - 1))] += sample(from + double(i) * formantRatio) * w * gain;
     }
     synth_ += P / std::max(pitchRatio, 0.5f);
   }
@@ -389,14 +412,15 @@ class NaturalShifter {
     const int window = maxPeriod_ * 2;
     float e0 = 0;
     for (int i = 0; i < window; i += 4) e0 += back(i) * back(i);
-    if (e0 < 5e-8f * float(window)) return; // silence: keep the last period
+    if (e0 < 5e-8f * float(window)) { voiced_ = false; return; } // silence: keep the last period
     float best = 0;
     int count = 0;
     for (int lag = minPeriod_; lag <= maxPeriod_; lag += 4, count++) {
       score_[size_t(count)] = correlate(lag, window, 4);
       best = std::max(best, score_[size_t(count)]);
     }
-    if (best < 0.4f) return; // unvoiced (s, sh, breath): any period will do, keep the last
+    voiced_ = best >= 0.4f;
+    if (!voiced_) return; // unvoiced (s, sh, breath): any period will do, keep the last
     for (int j = 1; j + 1 < count; j++) {
       if (score_[size_t(j)] >= 0.88f * best && score_[size_t(j)] >= score_[size_t(j - 1)] && score_[size_t(j)] >= score_[size_t(j + 1)]) {
         const int around = minPeriod_ + 4 * j;
@@ -419,6 +443,8 @@ class NaturalShifter {
   int64_t n_ = 0;
   float period_ = 320;
   double synth_ = 0, source_ = 0;
+  bool voiced_ = false;
+  unsigned seed_ = 2463534242u;
 };
 
 // The effects stage, between the voice chain and the room/limiter. Everything is bypassed
@@ -428,6 +454,12 @@ class Effects {
   void prepare(float sr) {
     sr_ = sr;
     echo_.assign(size_t(0.65f * sr) + 8, 0.0f);
+    chor_.assign(size_t(0.06f * sr) + 8, 0.0f);
+    chorPos_ = 0;
+    chorMix_ = crush_ = 0;
+    chorPh1_ = chorPh2_ = 0;
+    crushHold_ = 0;
+    crushCount_ = 0;
     pos_ = 0;
     ringPhase_ = tremPhase_ = 0;
     ringMix_ = echoMix_ = drive_ = tremDepth_ = 0;
@@ -450,18 +482,47 @@ class Effects {
     muffle_ = muffle;
     if (muffle_) low_.lowpass(sr_, p.fxLowpassHz, 0.9f);
     driveTarget_ = p.fxDrive;
+    chorTarget_ = p.fxChorus;
+    crushTarget_ = p.fxCrush;
     tremStep_ = 2.0f * kPi * p.fxTremHz / sr_;
     tremTarget_ = p.fxTremHz > 0 ? p.fxTremDepth : 0;
-    wanted_ = ringTarget_ > 0 || echoTarget_ > 0 || phone_ || muffle_ || driveTarget_ > 0 || tremTarget_ > 0;
+    wanted_ = ringTarget_ > 0 || echoTarget_ > 0 || phone_ || muffle_ || driveTarget_ > 0 || tremTarget_ > 0 || chorTarget_ > 0 || crushTarget_ > 0;
   }
   inline float process(float x) {
-    if (!wanted_ && ringMix_ < 1e-4f && echoMix_ < 1e-4f && drive_ < 1e-4f && tremDepth_ < 1e-4f) return x;
+    if (!wanted_ && ringMix_ < 1e-4f && echoMix_ < 1e-4f && drive_ < 1e-4f && tremDepth_ < 1e-4f && chorMix_ < 1e-4f && crush_ < 1e-4f) return x;
+    chorMix_ += (chorTarget_ - chorMix_) * smooth_;
+    crush_ += (crushTarget_ - crush_) * smooth_;
     ringMix_ += (ringTarget_ - ringMix_) * smooth_;
     echoMix_ += (echoTarget_ - echoMix_) * smooth_;
     drive_ += (driveTarget_ - drive_) * smooth_;
     tremDepth_ += (tremTarget_ - tremDepth_) * smooth_;
 
     if (drive_ > 0.001f) x = std::tanh(x * (1.0f + drive_ * 24.0f)) / (1.0f + drive_ * 6.0f); // megaphone grit, level kept sane
+    if (crush_ > 0.001f) { // hold every Nth sample and round it to a few bits
+      if (++crushCount_ >= 1 + int(crush_ * 11.0f)) {
+        crushCount_ = 0;
+        const float steps = std::pow(2.0f, 14.0f - crush_ * 10.0f);
+        crushHold_ = std::round(x * steps) / steps;
+      }
+      x = crushHold_;
+    }
+    if (chorMix_ > 0.001f) { // two copies 13 and 21 ms behind, each drifting a little: one voice becomes several
+      const int size = int(chor_.size());
+      chor_[size_t(chorPos_)] = x;
+      if ((chorPh1_ += 2 * kPi * 0.61f / sr_) > 2 * kPi) chorPh1_ -= 2 * kPi;
+      if ((chorPh2_ += 2 * kPi * 0.87f / sr_) > 2 * kPi) chorPh2_ -= 2 * kPi;
+      auto tap = [&](float ms) {
+        float at = float(chorPos_) - ms * 0.001f * sr_;
+        if (at < 0) at += float(size);
+        const int i0 = int(at), i1 = i0 + 1 >= size ? 0 : i0 + 1;
+        const float f = at - float(i0);
+        return chor_[size_t(i0)] * (1 - f) + chor_[size_t(i1)] * f;
+      };
+      const float depth = 1.5f + 4.0f * chorMix_;
+      const float copies = tap(13.0f + depth * std::sin(chorPh1_)) + tap(21.0f + depth * std::sin(chorPh2_));
+      if (++chorPos_ >= size) chorPos_ = 0;
+      x = x * (1.0f - 0.3f * chorMix_) + copies * 0.55f * chorMix_;
+    }
     if (phone_) x = lp_.process(hp_.process(x)) * 1.6f;
     if (muffle_) x = low_.process(x);
     if (ringMix_ > 0.001f) { // multiply by a tone: the classic robot
@@ -487,6 +548,9 @@ class Effects {
   float ringStep_ = 0, ringPhase_ = 0, ringMix_ = 0, ringTarget_ = 0;
   float tremStep_ = 0, tremPhase_ = 0, tremDepth_ = 0, tremTarget_ = 0;
   float drive_ = 0, driveTarget_ = 0;
+  std::vector<float> chor_;
+  int chorPos_ = 0, crushCount_ = 0;
+  float chorMix_ = 0, chorTarget_ = 0, chorPh1_ = 0, chorPh2_ = 0, crush_ = 0, crushTarget_ = 0, crushHold_ = 0;
   bool phone_ = false, muffle_ = false, wanted_ = false;
   Biquad hp_, lp_, low_;
 };
@@ -646,7 +710,8 @@ class Chain {
     // slider move it about half as far as the pitch, which is what makes a giant sound big.
     const float timbre = p.fxNatural > 0.5f ? p.fxFormant : 0.55f * semitones;
     formantRatio_ = std::pow(2.0f, std::clamp(timbre, -5.0f, 5.0f) / 12.0f);
-    useNatural_ = pitchRatio_ != 1.0f || std::fabs(timbre) > 0.01f;
+    useNatural_ = pitchRatio_ != 1.0f || std::fabs(timbre) > 0.01f || p.fxMutate > 0.01f;
+    natural_.configure(formantRatio_);
     fx_.set(p);
     outT_ = dbToGain(p.outGainDb);
   }
@@ -672,7 +737,21 @@ class Chain {
       revG_ += (revT_ - revG_) * smooth_;
 
       float x = in[n] * inG_;
-      if (useNatural_) x = natural_.process(x, pitchRatio_, formantRatio_);
+      if (useNatural_) {
+        float ratio = pitchRatio_;
+        if (params_.fxMutate > 0.01f) { // a new random pitch, up to seven semitones either way, every 0.15-0.9 s
+          if (--mutLeft_ <= 0) {
+            mutSeed_ = mutSeed_ * 1664525u + 1013904223u;
+            const float a = float(mutSeed_ >> 8) / 16777216.0f;
+            mutSeed_ = mutSeed_ * 1664525u + 1013904223u;
+            const float b = float(mutSeed_ >> 8) / 16777216.0f;
+            mutRatio_ = std::pow(2.0f, (a * 2.0f - 1.0f) * 7.0f * params_.fxMutate / 12.0f);
+            mutLeft_ = int((0.15f + 0.75f * b) * sr_);
+          }
+          ratio *= mutRatio_;
+        }
+        x = natural_.process(x, ratio, formantRatio_);
+      }
       x = hpf2_.process(hpf_.process(x));
       if (params_.dehum > 0.5f) x = hum_[2].process(hum_[1].process(hum_[0].process(x)));
       for (int i = 0; i < Params::kMicBands; i++) if (micOn_[i] && !micPost_[i]) x = mic_[i].process(x);
@@ -813,6 +892,9 @@ class Chain {
   float pitchRatio_ = 1.0f, formantRatio_ = 1.0f;
   bool useNatural_ = false;
   NaturalShifter natural_;
+  int mutLeft_ = 0;
+  unsigned mutSeed_ = 88172645u;
+  float mutRatio_ = 1.0f;
   Effects fx_;
   std::vector<float> delay_;
   int delayPos_ = 0;

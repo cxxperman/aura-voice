@@ -340,6 +340,7 @@ static void runNatural() {
     const float ratio = std::pow(2.0f, c.semitones / 12.0f), formant = std::pow(2.0f, c.formant / 12.0f);
     aura::NaturalShifter natural;
     natural.prepare(48000);
+    natural.configure(formant);
     aura::PitchShifter plain;
     plain.prepare(48000);
     std::vector<float> a(in.size()), b(in.size());
@@ -387,6 +388,9 @@ static void runEffects() {
     {"megaphone", with([](aura::Params& p) { p.fxPhone = 1; p.fxDrive = 0.8f; p.fxEchoMs = 90; p.fxEchoFb = 0.2f; p.fxEchoMix = 0.25f; })},
     {"cave", with([](aura::Params& p) { p.fxEchoMs = 260; p.fxEchoFb = 0.5f; p.fxEchoMix = 0.45f; p.fxSpace = 0.8f; })},
     {"underwater", with([](aura::Params& p) { p.fxLowpassHz = 600; p.fxTremHz = 5; p.fxTremDepth = 0.5f; })},
+    {"clones", with([](aura::Params& p) { p.fxChorus = 1; })},
+    {"console", with([](aura::Params& p) { p.fxCrush = 0.7f; })},
+    {"mutant", with([](aura::Params& p) { p.fxMutate = 1; })},
     {"broadcast", with([](aura::Params& p) { p.multiband = 1; p.satLow = 1; p.dehum = 1; p.loudTarget = -16; })},
     {"another person", with([](aura::Params& p) { p.fxPitch = 5; p.fxNatural = 1; p.fxFormant = 1.5f; })},
     {"everything", with([](aura::Params& p) { p.fxNatural = 1; p.fxFormant = 5; p.fxPitch = -12; p.fxRingHz = 2000; p.fxRingMix = 1; p.fxEchoMs = 600; p.fxEchoFb = 0.85f; p.fxEchoMix = 1; p.fxPhone = 1; p.fxDrive = 1; p.fxTremHz = 30; p.fxTremDepth = 1; p.fxLowpassHz = 8000; p.fxSpace = 1; })},
