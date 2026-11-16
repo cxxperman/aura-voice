@@ -14,6 +14,7 @@
     "electron-builder": "^26.18.0"
   },
   "author": "Aura",
+  "license": "MIT",
   "build": {
     "appId": "app.aura.voice",
     "productName": "Aura",
