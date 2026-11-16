@@ -47,7 +47,7 @@ npm start
 
 ## Code signing policy
 
-Релизы пока не подписаны. Подана (или будет подана) заявка на бесплатную подпись для открытых проектов:
+Релизы пока не подписаны. Планируется заявка на бесплатную подпись для открытых проектов; после одобрения подпись будет такой:
 
 Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 
