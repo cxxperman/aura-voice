@@ -1,8 +1,7 @@
-name: native
+name: build
 
 on:
   push:
-    paths: ['native/**', '.github/workflows/native.yml']
   workflow_dispatch:
 
 jobs:
@@ -10,15 +9,33 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
+
+      # The system module (APO) and its installer helper
+      - name: Configure native
         run: cmake -S native -B native/build -A x64
-      - name: Build
+      - name: Build native
         run: cmake --build native/build --config Release
       - name: Test the voice chain
         run: native/build/Release/dsp_test.exe
+      - name: Stage native binaries
+        shell: bash
+        run: |
+          mkdir -p native/bin
+          cp native/build/Release/AuraAPO.dll native/build/Release/AuraSetup.exe native/bin/
       - uses: actions/upload-artifact@v4
         with:
           name: aura-native
-          path: |
-            native/build/Release/AuraAPO.dll
-            native/build/Release/AuraSetup.exe
+          path: native/bin/
+
+      # The Windows installer
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build installer
+        run: npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aura-installer
+          path: dist/Aura-Setup-*.exe

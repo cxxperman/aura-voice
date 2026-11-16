@@ -6,4 +6,7 @@ contextBridge.exposeInMainWorld('auraSystem', {
   status: () => ipcRenderer.invoke('system:status'),
   write: (text) => ipcRenderer.invoke('system:write', text),
   setup: (action, unprotect) => ipcRenderer.invoke('system:setup', action, !!unprotect),
+  // Tray menu <-> window
+  report: (state) => ipcRenderer.send('ui:state', state),
+  onCommand: (handler) => ipcRenderer.on('tray:command', (_e, name, arg) => handler(name, arg)),
 });

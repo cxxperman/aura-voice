@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, ipcMain } = require('electron');
+const { app, BrowserWindow, session, ipcMain, Tray, Menu } = require('electron');
 const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -7,13 +7,19 @@ const fs = require('fs');
 const shotArg = process.argv.find((a) => a.startsWith('--shot='));
 const testMode = process.argv.includes('--test');
 const probeMode = process.argv.includes('--probe'); // dev: switch on for one run without saving
+const devRun = !!shotArg || testMode || probeMode;
+const startHidden = process.argv.includes('--hidden'); // launched with Windows: straight to the tray
+const asset = (name) => path.join(__dirname, 'assets', name);
 
 // Let the audio engine start on launch, without waiting for a click.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
-if (!shotArg && !testMode && !probeMode && !app.requestSingleInstanceLock()) app.quit();
+if (!devRun && !app.requestSingleInstanceLock()) app.quit();
 
 let win;
+let tray;
+let quitting = false;
+let ui = { on: false, preset: '', presetName: '', presets: [] }; // what the window last reported
 
 function createWindow() {
   win = new BrowserWindow({
@@ -24,6 +30,7 @@ function createWindow() {
     show: false,
     backgroundColor: '#09090d',
     title: 'Aura',
+    icon: asset('icon.ico'),
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#00000000', symbolColor: '#ffffff', height: 44 },
     webPreferences: {
@@ -39,7 +46,25 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'app', 'index.html'), {
     query: testMode ? { test: '1' } : probeMode ? { probe: '1' } : {},
   });
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    if (!startHidden) win.show();
+  });
+
+  // Closing the window keeps Aura in the tray: the voice stays on, like a proper background utility.
+  win.on('close', (e) => {
+    if (quitting || devRun) return;
+    e.preventDefault();
+    win.hide();
+    const flag = path.join(app.getPath('userData'), 'tray-hint-shown');
+    if (!fs.existsSync(flag)) {
+      fs.writeFileSync(flag, '');
+      tray?.displayBalloon({
+        title: 'Aura осталась в трее',
+        content: 'Голос продолжает обрабатываться. Чтобы закрыть совсем — правый клик по рыбке → «Выйти».',
+        icon: asset('icon.png'),
+      });
+    }
+  });
 
   if (shotArg || testMode || probeMode) {
     win.webContents.on('console-message', (e) => {
@@ -55,9 +80,69 @@ function createWindow() {
   }
 }
 
+/* ───── Tray ───── */
+function showWindow() {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+const command = (name, arg) => win?.webContents.send('tray:command', name, arg);
+
+function refreshTray() {
+  if (!tray) return;
+  tray.setImage(asset(ui.on ? 'tray.png' : 'tray-off.png'));
+  tray.setToolTip(ui.on ? `Aura — ${ui.presetName}` : 'Aura — выключено');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Открыть Aura', click: showWindow },
+      { type: 'separator' },
+      { label: 'Обработка голоса', type: 'checkbox', checked: ui.on, click: () => command('power') },
+      {
+        label: 'Характер',
+        enabled: ui.presets.length > 0,
+        submenu: ui.presets.map((p) => ({ label: p.name, type: 'radio', checked: p.id === ui.preset, click: () => command('preset', p.id) })),
+      },
+      { type: 'separator' },
+      {
+        label: 'Запускать вместе с Windows',
+        type: 'checkbox',
+        enabled: app.isPackaged, // only meaningful for the installed app
+        checked: app.isPackaged && app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin,
+        click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'] }),
+      },
+      { type: 'separator' },
+      {
+        label: 'Выйти',
+        click: () => {
+          quitting = true;
+          app.quit();
+        },
+      },
+    ])
+  );
+}
+
+function createTray() {
+  tray = new Tray(asset('tray-off.png'));
+  tray.on('click', showWindow);
+  refreshTray();
+}
+
+ipcMain.on('ui:state', (_e, state) => {
+  if (!state || typeof state !== 'object') return;
+  ui = {
+    on: !!state.on,
+    preset: String(state.preset || ''),
+    presetName: String(state.presetName || ''),
+    presets: Array.isArray(state.presets) ? state.presets.slice(0, 20).map((p) => ({ id: String(p.id), name: String(p.name) })) : [],
+  };
+  refreshTray();
+});
+
 /* ───── System module (APO) ───── */
 const dataDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'Aura');
-const binDir = path.join(__dirname, 'native', 'bin');
+const binDir = app.isPackaged ? path.join(process.resourcesPath, 'native') : path.join(__dirname, 'native', 'bin');
 const installedDll = path.join(process.env.ProgramW6432 || process.env.ProgramFiles || 'C:\\Program Files', 'Aura', 'AuraAPO.dll');
 
 ipcMain.handle('system:status', () => {
@@ -109,12 +194,12 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowed.has(permission)));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
   createWindow();
+  if (!devRun) createTray();
 });
 
-app.on('second-instance', () => {
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.focus();
+app.on('second-instance', showWindow);
+app.on('before-quit', () => {
+  quitting = true;
 });
 
 app.on('window-all-closed', () => app.quit());

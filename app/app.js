@@ -216,8 +216,18 @@ async function setPower(on) {
   renderPower();
   renderSystem();
 }
+// Keep the tray icon and its menu in step with the window.
+function reportToTray() {
+  window.auraSystem?.report({
+    on: engine.running,
+    preset: state.preset,
+    presetName: PRESETS[state.preset]?.name || '',
+    presets: Object.entries(PRESETS).map(([id, p]) => ({ id, name: p.name })),
+  });
+}
 function renderPower() {
   const on = engine.running;
+  reportToTray();
   document.body.classList.toggle('on', on);
   powerBtn.setAttribute('aria-pressed', String(on));
   powerBtn.setAttribute('aria-label', on ? 'Выключить обработку голоса' : 'Включить обработку голоса');
@@ -236,15 +246,18 @@ for (const [id, p] of Object.entries(PRESETS)) {
   b.textContent = p.name;
   b.dataset.id = id;
   b.setAttribute('role', 'radio');
-  b.addEventListener('click', () => {
-    state.preset = id;
-    state.v = { ...p.v };
-    renderPreset();
-    renderSliders();
-    applyAll();
-    save();
-  });
+  b.addEventListener('click', () => selectPreset(id));
   presetsEl.append(b);
+}
+function selectPreset(id) {
+  if (!PRESETS[id]) return;
+  state.preset = id;
+  state.v = { ...PRESETS[id].v };
+  renderPreset();
+  renderSliders();
+  applyAll();
+  save();
+  reportToTray();
 }
 function renderPreset() {
   const p = PRESETS[state.preset] || PRESETS.studio;
@@ -560,6 +573,10 @@ async function boot() {
   await refreshDevices();
   await pollSystem();
   setInterval(pollSystem, 2000);
+  window.auraSystem?.onCommand((name, arg) => {
+    if (name === 'power') setPower(!engine.running);
+    if (name === 'preset') selectPreset(arg);
+  });
   if (state.on) await setPower(true);
 
   if (TEST) {

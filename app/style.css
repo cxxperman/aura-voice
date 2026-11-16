@@ -40,6 +40,7 @@ body.on .backdrop { opacity: 1; }
 .backdrop i:nth-child(2) { width: 480px; height: 480px; left: 180px; bottom: -220px; background: hsl(calc(var(--hue) + 50) 90% 55% / 0.34); }
 .backdrop i:nth-child(3) { width: 520px; height: 520px; right: -180px; top: 60px; background: hsl(calc(var(--hue) - 40) 85% 50% / 0.22); }
 
+.titlebar img { width: 18px; height: 18px; margin-right: 8px; }
 .titlebar {
   position: fixed; inset: 0 0 auto 0; height: 44px; z-index: 2;
   display: flex; align-items: center; padding-left: 20px;

@@ -1,13 +1,58 @@
 {
   "name": "aura-voice",
   "productName": "Aura",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Студийная обработка голоса с микрофона в реальном времени",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "icons": "node scripts/make-icon.js",
+    "dist": "electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
-    "electron": "^45.3.2"
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0"
+  },
+  "author": "Aura",
+  "build": {
+    "appId": "app.aura.voice",
+    "productName": "Aura",
+    "files": [
+      "main.js",
+      "preload.js",
+      "app/**",
+      "assets/**"
+    ],
+    "extraResources": [
+      {
+        "from": "native/bin",
+        "to": "native"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "shortcutName": "Aura",
+      "createDesktopShortcut": true,
+      "runAfterFinish": true,
+      "include": "build/installer.nsh",
+      "artifactName": "Aura-Setup-${version}.exe"
+    }
   }
 }
