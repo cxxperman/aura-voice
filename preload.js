@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('auraSystem', {
   readSound: (id) => ipcRenderer.invoke('sounds:read', id),
   removeSound: (id) => ipcRenderer.invoke('sounds:remove', id),
   writeClip: (samples) => ipcRenderer.invoke('sounds:clip', samples),
+  // UwUpad catalogue
+  catalog: (query) => ipcRenderer.invoke('uwu:list', query),
+  catalogSound: (item) => ipcRenderer.invoke('uwu:sound', item),
+  catalogAdd: (item) => ipcRenderer.invoke('uwu:add', item),
+  openCatalogSite: () => ipcRenderer.invoke('uwu:open'),
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
   importPreset: () => ipcRenderer.invoke('preset:import'),
   write: (text) => ipcRenderer.invoke('system:write', text),

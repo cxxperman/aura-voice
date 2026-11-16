@@ -167,6 +167,8 @@ function renderSystem() {
     action = 'Убрать';
   }
   card.classList.toggle('warn', silent || !!sys.detached);
+  // The card lives on the Settings page: flag the tab when it needs attention.
+  tabButtons.find((b) => b.dataset.tab === 'setup').classList.toggle('attention', silent || !!sys.detached);
   $('#sysTitle').textContent = title;
   $('#sysText').textContent = sysMessage || text;
   btn.textContent = sysBusy ? 'Подождите…' : action;
@@ -544,7 +546,13 @@ function renderPads() {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'pad';
-      b.textContent = pad.name;
+      const index = state.pads.indexOf(pad);
+      if (index < 9) {
+        const key = document.createElement('kbd');
+        key.textContent = String(index + 1);
+        b.append(key);
+      }
+      b.append(pad.name);
       b.title = `${pad.name} — правый клик, чтобы убрать`;
       b.addEventListener('click', () => playPad(pad));
       b.addEventListener('contextmenu', (e) => {
@@ -554,6 +562,7 @@ function renderPads() {
         window.auraSystem.removeSound(pad.id);
         save();
         renderPads();
+        renderCatalog();
       });
       return b;
     })
@@ -568,18 +577,11 @@ function stopLocalPad() {
   padSource = null;
 }
 
-async function playPad(pad) {
-  if (!sys.installed || !engine.running) return flash('Звуки идут через модуль: встройте Aura в микрофон и включите сферу.', true);
-  const bytes = await window.auraSystem.readSound(pad.id);
-  if (!bytes) return flash('Файл этого звука не найден.', true);
-  let decoded;
-  try {
-    // An offline context at 48 kHz resamples whatever the file is to the rate the module wants.
-    decoded = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-  } catch {
-    return flash('Не получилось прочитать этот файл как звук.', true);
-  }
-  const length = Math.min(decoded.length, 48000 * 20); // at most 20 seconds
+// Any audio file → mono 48 kHz, at most 20 s, normalised so every sound is equally loud.
+async function decodeSound(bytes) {
+  // An offline context at 48 kHz resamples whatever the file is to the rate the module wants.
+  const decoded = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  const length = Math.min(decoded.length, 48000 * 20);
   const mono = new Float32Array(length);
   for (let c = 0; c < decoded.numberOfChannels; c++) {
     const data = decoded.getChannelData(c);
@@ -587,24 +589,46 @@ async function playPad(pad) {
   }
   let peak = 0;
   for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(mono[i]));
-  if (peak > 0) for (let i = 0; i < length; i++) mono[i] *= 0.7 / peak; // every pad equally loud
+  if (peak > 0) for (let i = 0; i < length; i++) mono[i] *= 0.7 / peak;
+  return mono;
+}
 
+// Play to the user's own ears only (headphones chosen in Settings). Returns the source node.
+async function playLocal(mono, onEnded) {
+  stopLocalPad();
+  padContext ??= new AudioContext({ sampleRate: 48000 });
+  await padContext.setSinkId(state.monitorId || '').catch(() => {});
+  const buffer = padContext.createBuffer(1, mono.length, 48000);
+  buffer.copyToChannel(mono, 0);
+  const gain = padContext.createGain();
+  gain.gain.value = (state.clipGain / 100) * 0.8;
+  const source = padContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(gain).connect(padContext.destination);
+  source.onended = () => {
+    if (padSource === source) padSource = null;
+    onEnded?.();
+  };
+  source.start();
+  padSource = source;
+  return source;
+}
+
+async function playPad(pad) {
+  if (!sys.installed || !engine.running) return flash('Звуки идут через модуль: встройте Aura в микрофон и включите сферу.', true);
+  const bytes = await window.auraSystem.readSound(pad.id);
+  if (!bytes) return flash('Файл этого звука не найден.', true);
+  let mono;
+  try {
+    mono = await decodeSound(bytes);
+  } catch {
+    return flash('Не получилось прочитать этот файл как звук.', true);
+  }
   if (!(await window.auraSystem.writeClip(mono))) return flash('Не удалось передать звук модулю.', true);
   state.playId++;
   save();
   pushSystem();
-
-  stopLocalPad();
-  padContext ??= new AudioContext({ sampleRate: 48000 });
-  await padContext.setSinkId(state.monitorId || '').catch(() => {});
-  const buffer = padContext.createBuffer(1, length, 48000);
-  buffer.copyToChannel(mono, 0);
-  const gain = padContext.createGain();
-  gain.gain.value = (state.clipGain / 100) * 0.8;
-  padSource = padContext.createBufferSource();
-  padSource.buffer = buffer;
-  padSource.connect(gain).connect(padContext.destination);
-  padSource.start();
+  playLocal(mono);
 }
 
 $('#padAdd').addEventListener('click', async () => {
@@ -631,6 +655,143 @@ $('#padStop').addEventListener('click', () => {
     pushSystem();
   });
 }
+
+/* ───────── Catalogue (UwUpad) ─────────
+ * Browse and search the site's sounds without leaving the window: listen first (only you
+ * hear the preview), then one click puts the sound on a pad. */
+const catalog = { feed: 'popular', query: '', items: [], total: 0, loading: false, started: false, previewing: null };
+const catalogList = $('#catalogList');
+const catalogNote = (text) => ($('#catalogNote').textContent = text);
+
+async function loadCatalog(reset) {
+  if (catalog.loading) return;
+  catalog.loading = true;
+  if (reset) catalog.items = [];
+  catalogNote('Загружаю…');
+  const res = await window.auraSystem.catalog({ feed: catalog.feed, query: catalog.query, offset: catalog.items.length }).catch((err) => {
+    console.error('catalog failed:', err?.message);
+    return null;
+  });
+  catalog.loading = false;
+  if (!res || res.error) {
+    renderCatalog();
+    return catalogNote('UwUpad не отвечает. Проверьте интернет и попробуйте ещё раз.');
+  }
+  catalog.items.push(...res.items);
+  catalog.total = res.total;
+  renderCatalog();
+}
+
+function renderCatalog() {
+  if (!catalog.started) return;
+  const mine = new Set(state.pads.map((p) => p.source));
+  catalogList.replaceChildren(
+    ...catalog.items.map((item) => {
+      const row = document.createElement('div');
+      row.className = 'catalog-row';
+      const play = document.createElement('button');
+      play.type = 'button';
+      play.className = 'catalog-play';
+      play.setAttribute('aria-label', `Прослушать «${item.title}»`);
+      play.textContent = catalog.previewing === item.id ? '■' : '▶';
+      play.addEventListener('click', () => previewSound(item));
+      const title = document.createElement('span');
+      title.className = 'catalog-title';
+      title.textContent = item.title;
+      const meta = document.createElement('span');
+      meta.className = 'catalog-meta';
+      meta.textContent = [item.explicit ? '18+' : '', item.loud ? 'громкий' : '', `${item.duration} с`, `♥ ${item.likes}`].filter(Boolean).join(' · ');
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'pill small';
+      const have = mine.has(`uwu:${item.id}`);
+      add.textContent = have ? 'Добавлен' : 'Добавить';
+      add.disabled = have;
+      add.addEventListener('click', async () => {
+        add.disabled = true;
+        add.textContent = 'Скачиваю…';
+        const pad = await window.auraSystem.catalogAdd(item);
+        if (!pad) {
+          add.disabled = false;
+          add.textContent = 'Добавить';
+          return flash('Не удалось скачать этот звук.', true);
+        }
+        state.pads.push(pad);
+        save();
+        renderPads();
+        renderCatalog();
+      });
+      row.append(play, title, meta, add);
+      return row;
+    })
+  );
+  $('#catalogMore').hidden = !catalog.items.length || catalog.items.length >= catalog.total;
+  catalogNote(catalog.items.length || catalog.loading ? '' : 'Ничего не нашлось.');
+  for (const b of $('#catalogFeeds').children) {
+    b.setAttribute('aria-checked', String(!catalog.query && b.dataset.feed === catalog.feed));
+  }
+}
+
+async function previewSound(item) {
+  if (catalog.previewing === item.id) {
+    catalog.previewing = null;
+    stopLocalPad();
+    return renderCatalog();
+  }
+  catalog.previewing = item.id;
+  renderCatalog();
+  const done = () => {
+    if (catalog.previewing === item.id) {
+      catalog.previewing = null;
+      renderCatalog();
+    }
+  };
+  try {
+    const bytes = await window.auraSystem.catalogSound(item);
+    if (!bytes) throw new Error('no data');
+    const mono = await decodeSound(bytes);
+    if (catalog.previewing !== item.id) return; // the user moved on while it was downloading
+    await playLocal(mono, done);
+  } catch {
+    done();
+    flash('Не удалось проиграть этот звук.', true);
+  }
+}
+
+let searchTimer = 0;
+$('#catalogSearch').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    catalog.query = e.target.value.trim();
+    loadCatalog(true);
+  }, 450); // wait until typing pauses: one request per search, not one per letter
+});
+for (const b of $('#catalogFeeds').children) {
+  b.addEventListener('click', () => {
+    catalog.feed = b.dataset.feed;
+    catalog.query = '';
+    $('#catalogSearch').value = '';
+    loadCatalog(true);
+  });
+}
+$('#catalogMore').addEventListener('click', () => loadCatalog(false));
+$('#catalogSite').addEventListener('click', () => window.auraSystem.openCatalogSite());
+
+/* ───────── Pages ───────── */
+const tabButtons = [...$('#tabs').children];
+function showTab(name) {
+  if (!tabButtons.some((b) => b.dataset.tab === name)) name = 'voice';
+  for (const b of tabButtons) b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  for (const page of document.querySelectorAll('.page')) page.hidden = page.dataset.page !== name;
+  try {
+    localStorage.setItem('aura.tab', name);
+  } catch {}
+  if (name === 'sounds' && !catalog.started) {
+    catalog.started = true; // nothing is fetched until the user actually opens the page
+    loadCatalog(true);
+  }
+}
+for (const b of tabButtons) b.addEventListener('click', () => showTab(b.dataset.tab));
 
 /* ───────── Noise-suppression engine ───────── */
 const engineSelect = $('#nsEngine');
@@ -828,6 +989,11 @@ async function boot() {
   $('#mute').disabled = true; // until the module is known to be installed
   renderEngine();
   renderPads();
+  let savedTab = 'voice';
+  try {
+    savedTab = new URLSearchParams(location.search).get('tab') || localStorage.getItem('aura.tab') || 'voice';
+  } catch {}
+  showTab(savedTab);
   renderPreset();
   renderSliders();
   renderPower();
@@ -846,6 +1012,7 @@ async function boot() {
   window.auraSystem?.onCommand((name, arg) => {
     if (name === 'power') setPower(!engine.running);
     if (name === 'preset') selectPreset(arg);
+    if (name === 'pad' && state.pads[arg]) playPad(state.pads[arg]);
     if (name === 'mute' && sys.installed) {
       $('#mute').checked = state.mute = !state.mute;
       save();

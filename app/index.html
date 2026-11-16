@@ -38,45 +38,74 @@
     </section>
 
     <section class="controls">
-      <div class="presets" id="presets" role="radiogroup" aria-label="Характер голоса"></div>
+      <nav class="tabs" id="tabs" role="tablist" aria-label="Разделы">
+        <button type="button" role="tab" data-tab="voice">Голос</button>
+        <button type="button" role="tab" data-tab="sounds">Звуки</button>
+        <button type="button" role="tab" data-tab="setup">Настройки</button>
+      </nav>
 
-      <div class="preset-files"><button type="button" id="presetSave">Сохранить в файл</button><button type="button" id="presetLoad">Загрузить из файла</button></div>
+      <div class="page" data-page="voice">
+        <div class="presets" id="presets" role="radiogroup" aria-label="Характер голоса"></div>
 
-      <div class="card sliders" id="sliders"></div>
+        <div class="preset-files"><button type="button" id="presetSave">Сохранить в файл</button><button type="button" id="presetLoad">Загрузить из файла</button></div>
 
-      <div class="card toggles">
-        <label class="switch"><span><b>Авто-уровень</b><small>Выравнивает громкость, вытягивает тихий микрофон</small></span><input type="checkbox" id="auto"><i></i></label>
-        <label class="switch"><span><b>Заглушить микрофон</b><small>Тишина для всех программ · Ctrl+Shift+F10</small></span><input type="checkbox" id="mute"><i></i></label>
-        <label class="switch"><span><b>Слышать себя</b><small>Только в наушниках, иначе будет эхо</small></span><input type="checkbox" id="monitor"><i></i></label>
-      </div>
+        <div class="card sliders" id="sliders"></div>
 
-      <div class="card soundboard">
-        <div class="soundboard-head">
-          <b>Звуки</b>
-          <label class="pad-volume"><span>Громкость</span><input type="range" id="padVolume" min="0" max="100" step="1"></label>
-          <button type="button" class="pill small" id="padStop">Стоп</button>
-          <button type="button" class="pill small" id="padAdd">Добавить</button>
-        </div>
-        <div class="pads" id="pads"></div>
-        <p class="pads-empty" id="padsEmpty">Добавьте файлы mp3, wav или ogg. Нажатие проиграет звук в микрофон — его услышат все программы — и вам в наушники.</p>
-      </div>
-
-      <div class="card system" id="systemCard" hidden>
-        <div><b id="sysTitle"></b><small id="sysText"></small></div>
-        <div class="system-actions">
-          <button class="pill" id="sysAlt" hidden>Убрать</button>
-          <button class="pill" id="sysBtn"></button>
+        <div class="card toggles">
+          <label class="switch"><span><b>Авто-уровень</b><small>Выравнивает громкость, вытягивает тихий микрофон</small></span><input type="checkbox" id="auto"><i></i></label>
+          <label class="switch"><span><b>Заглушить микрофон</b><small>Тишина для всех программ · Ctrl+Shift+F10</small></span><input type="checkbox" id="mute"><i></i></label>
+          <label class="switch"><span><b>Слышать себя</b><small>Только в наушниках, иначе будет эхо</small></span><input type="checkbox" id="monitor"><i></i></label>
         </div>
       </div>
 
-      <div class="card devices">
-        <label class="field"><span>Микрофон</span><select id="inputId"></select></label>
-        <label class="field"><span>Выход в приложения</span><select id="outputId"></select></label>
-        <label class="field"><span>Наушники</span><select id="monitorId"></select></label>
-        <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 40 мс</option></select></label>
-        <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
-        <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
-        <p class="route" id="route"></p>
+      <div class="page" data-page="sounds" hidden>
+        <div class="card soundboard">
+          <div class="soundboard-head">
+            <b>Мои звуки</b>
+            <label class="pad-volume"><span>Громкость</span><input type="range" id="padVolume" min="0" max="100" step="1"></label>
+            <button type="button" class="pill small" id="padStop">Стоп</button>
+            <button type="button" class="pill small" id="padAdd">Из файла</button>
+          </div>
+          <div class="pads" id="pads"></div>
+          <p class="pads-empty" id="padsEmpty">Здесь будут ваши звуки: добавьте их из каталога ниже или из файла. Нажатие проигрывает звук в микрофон — его слышат все программы — и вам в наушники. Первые девять включаются ещё и по Ctrl+Alt+1…9, даже из игры.</p>
+        </div>
+
+        <div class="card catalog">
+          <div class="catalog-head">
+            <input type="search" id="catalogSearch" placeholder="Найти звук: мем, игра, фраза…" autocomplete="off" spellcheck="false" aria-label="Поиск звуков">
+            <div class="catalog-feeds" id="catalogFeeds" role="radiogroup" aria-label="Подборка">
+              <button type="button" role="radio" data-feed="popular">Популярное</button>
+              <button type="button" role="radio" data-feed="trending">В тренде</button>
+              <button type="button" role="radio" data-feed="latest">Новое</button>
+            </div>
+          </div>
+          <div class="catalog-list" id="catalogList"></div>
+          <div class="catalog-foot">
+            <button type="button" class="pill small" id="catalogMore" hidden>Показать ещё</button>
+            <span id="catalogNote"></span>
+            <button type="button" class="link" id="catalogSite">Каталог: UwUpad</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" data-page="setup" hidden>
+        <div class="card system" id="systemCard" hidden>
+          <div><b id="sysTitle"></b><small id="sysText"></small></div>
+          <div class="system-actions">
+            <button class="pill" id="sysAlt" hidden>Убрать</button>
+            <button class="pill" id="sysBtn"></button>
+          </div>
+        </div>
+
+        <div class="card devices">
+          <label class="field"><span>Микрофон</span><select id="inputId"></select></label>
+          <label class="field"><span>Выход в приложения</span><select id="outputId"></select></label>
+          <label class="field"><span>Наушники</span><select id="monitorId"></select></label>
+          <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 40 мс</option></select></label>
+          <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
+          <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
+          <p class="route" id="route"></p>
+        </div>
       </div>
     </section>
   </main>

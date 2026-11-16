@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog } = require('electron');
+const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog, shell } = require('electron');
 const { execFile } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
@@ -9,6 +9,8 @@ const shotArg = process.argv.find((a) => a.startsWith('--shot='));
 const testMode = process.argv.includes('--test');
 const probeMode = process.argv.includes('--probe'); // dev: switch on for one run without saving
 const devRun = !!shotArg || testMode || probeMode;
+const tabArg = process.argv.find((a) => a.startsWith('--tab=')); // dev: open on a given page
+const clickSelector = process.env.AURA_CLICK; // dev: click this selector partway through a --shot run
 const startHidden = process.argv.includes('--hidden'); // launched with Windows: straight to the tray
 const asset = (name) => path.join(__dirname, 'assets', name);
 
@@ -42,15 +44,16 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
       sandbox: true,
+      offscreen: !!shotArg, // dev screenshots render in memory, so they work with the display locked or off
     },
   });
 
   win.removeMenu();
   win.loadFile(path.join(__dirname, 'app', 'index.html'), {
-    query: testMode ? { test: '1' } : probeMode ? { probe: '1' } : {},
+    query: { ...(testMode ? { test: '1' } : probeMode ? { probe: '1' } : {}), ...(tabArg ? { tab: tabArg.slice('--tab='.length) } : {}) },
   });
   win.once('ready-to-show', () => {
-    if (!startHidden) win.show();
+    if (!startHidden && !shotArg) win.show();
   });
 
   // Closing the window keeps Aura in the tray: the voice stays on, like a proper background utility.
@@ -70,16 +73,33 @@ function createWindow() {
   });
 
   if (shotArg || testMode || probeMode) {
+    if (shotArg && clickSelector) {
+      setTimeout(async () => {
+        const result = await win.webContents
+          .executeJavaScript(`(async () => { for (let i = 0; i < 40; i++) { const el = document.querySelector(${JSON.stringify(clickSelector)}); if (el) { el.click(); return 'clicked ' + el.tagName + ' "' + el.textContent + '"'; } await new Promise((r) => setTimeout(r, 250)); } return 'no element'; })()`)
+          .catch((err) => 'click failed: ' + err.message);
+        console.log('[click]', result);
+      }, 1500);
+    }
     win.webContents.on('console-message', (e) => {
       console.log('[renderer]', e.message);
     });
     setTimeout(async () => {
       if (shotArg) {
-        const img = await win.webContents.capturePage();
-        fs.writeFileSync(shotArg.slice('--shot='.length), img.toPNG());
+        try {
+          const img = await win.webContents.capturePage();
+          fs.writeFileSync(shotArg.slice('--shot='.length), img.toPNG());
+        } catch (err) {
+          console.log('[shot] failed:', err.message);
+        }
+        // A text summary of what is on screen, for when a picture is not enough.
+        const summary = await win.webContents
+          .executeJavaScript("JSON.stringify({ tab: document.querySelector('.tabs [aria-selected=true]')?.textContent, pages: [...document.querySelectorAll('.page')].filter((p) => !p.hidden).map((p) => p.dataset.page), pads: [...document.querySelectorAll('.pad')].map((e) => e.textContent), added: document.querySelector('.catalog-row .pill')?.textContent, rows: document.querySelectorAll('.catalog-row').length, first: [...document.querySelectorAll('.catalog-title')].slice(0, 3).map((e) => e.textContent), note: document.querySelector('#catalogNote')?.textContent, status: document.querySelector('#status')?.textContent })")
+          .catch((err) => 'summary failed: ' + err.message);
+        console.log('[dom]', summary);
       }
       app.quit();
-    }, probeMode ? 10000 : 4500);
+    }, probeMode ? 10000 : shotArg ? 14000 : 4500);
   }
 }
 
@@ -136,6 +156,78 @@ ipcMain.handle('sounds:clip', (_e, samples) => {
     return false;
   }
 });
+
+/* ───── UwUpad catalogue ─────
+ * The window never talks to the network itself; these handlers do, and only to this one site.
+ * Requests happen when the user searches, scrolls or presses a button — nothing is crawled. */
+const UWU_SITE = 'https://uwupad.me';
+const UWU_CDN = 'https://cdn.uwupad.me';
+const uwuHeaders = () => ({ Accept: 'application/json', 'User-Agent': `AuraVoice/${app.getVersion()} (desktop soundboard)` });
+const uwuExt = /^(mp3|wav|ogg|m4a|flac|opus)$/;
+const uwuCache = new Map(); // recently fetched audio, so "listen, then add" downloads once
+
+ipcMain.handle('uwu:list', async (_e, q) => {
+  const feed = ['popular', 'trending', 'latest'].includes(q?.feed) ? q.feed : 'popular';
+  const query = typeof q?.query === 'string' ? q.query.trim().slice(0, 80) : '';
+  const offset = Math.max(0, Math.min(5000, Number(q?.offset) || 0));
+  const url = query
+    ? `${UWU_SITE}/api/search?v3=true&query=${encodeURIComponent(query)}&limit=24&offset=${offset}`
+    : `${UWU_SITE}/api/sounds/?v3=true&tab=${feed}&limit=24&offset=${offset}`;
+  try {
+    const res = await fetch(url, { headers: uwuHeaders(), signal: AbortSignal.timeout(12000) });
+    if (!res.ok) return { error: true };
+    const json = await res.json();
+    const items = (Array.isArray(json?.data) ? json.data : [])
+      .slice(0, 24)
+      .map((s) => ({
+        id: Number(s.id),
+        file: Number(s.original_id || s.id), // re-uploads point at the original file
+        ext: String(s.extension || 'mp3').toLowerCase(),
+        title: String(s.title || 'Без названия').slice(0, 80),
+        duration: Math.round(Number(s.duration) || 0),
+        likes: Number(s.likes) || 0,
+        explicit: !!s.is_explicit,
+        loud: !!s.is_loud,
+      }))
+      .filter((s) => Number.isInteger(s.id) && Number.isInteger(s.file) && s.file > 0 && uwuExt.test(s.ext));
+    return { total: Number(json.total) || items.length, items };
+  } catch {
+    return { error: true };
+  }
+});
+
+async function uwuAudio(item) {
+  const file = Number(item?.file);
+  const ext = String(item?.ext || '');
+  if (!Number.isInteger(file) || file <= 0 || !uwuExt.test(ext)) return null;
+  const key = `${file}.${ext}`;
+  if (uwuCache.has(key)) return uwuCache.get(key);
+  try {
+    const res = await fetch(`${UWU_CDN}/${key}`, { headers: { 'User-Agent': uwuHeaders()['User-Agent'] }, signal: AbortSignal.timeout(20000) });
+    if (!res.ok) return null;
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (!bytes.length || bytes.length > 15e6) return null;
+    uwuCache.set(key, bytes);
+    if (uwuCache.size > 30) uwuCache.delete(uwuCache.keys().next().value);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+ipcMain.handle('uwu:sound', (_e, item) => uwuAudio(item));
+ipcMain.handle('uwu:add', async (_e, item) => {
+  const bytes = await uwuAudio(item);
+  if (!bytes) return null;
+  try {
+    fs.mkdirSync(soundsDir(), { recursive: true });
+    const id = `${crypto.randomUUID()}.${item.ext}`;
+    fs.writeFileSync(path.join(soundsDir(), id), bytes);
+    return { id, name: String(item.title || 'Звук').slice(0, 40), source: `uwu:${Number(item.id)}` };
+  } catch {
+    return null;
+  }
+});
+ipcMain.handle('uwu:open', () => shell.openExternal(UWU_SITE));
 
 /* ───── Preset files ───── */
 const presetFilter = [{ name: 'Пресет Aura', extensions: ['json'] }];
@@ -323,6 +415,8 @@ app.whenReady().then(() => {
     // Work from inside a game, without alt-tabbing to the window.
     globalShortcut.register(HOTKEY_POWER, () => command('power'));
     globalShortcut.register(HOTKEY_MUTE, () => command('mute'));
+    // Soundpad-style: the first nine pads from anywhere.
+    for (let i = 0; i < 9; i++) globalShortcut.register(`Ctrl+Alt+${i + 1}`, () => command('pad', i));
   }
 });
 
