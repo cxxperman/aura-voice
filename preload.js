@@ -6,6 +6,11 @@ contextBridge.exposeInMainWorld('auraSystem', {
   status: () => ipcRenderer.invoke('system:status'),
   levels: () => ipcRenderer.invoke('system:levels'),
   resetDeep: () => ipcRenderer.invoke('system:reset-deep'),
+  // Soundboard
+  addSounds: () => ipcRenderer.invoke('sounds:add'),
+  readSound: (id) => ipcRenderer.invoke('sounds:read', id),
+  removeSound: (id) => ipcRenderer.invoke('sounds:remove', id),
+  writeClip: (samples) => ipcRenderer.invoke('sounds:clip', samples),
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
   importPreset: () => ipcRenderer.invoke('preset:import'),
   write: (text) => ipcRenderer.invoke('system:write', text),

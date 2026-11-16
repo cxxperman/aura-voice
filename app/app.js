@@ -42,6 +42,10 @@ const DEFAULTS = {
   custom: null,
   mute: false,
   nsEngine: 0, // 0 = fast (RNNoise), 1 = high quality (DeepFilterNet)
+  pads: [], // soundboard: [{ id: stored file name, name }]
+  playId: 0,
+  playStop: 0,
+  clipGain: 70,
   monitor: false,
   inputId: '',
   outputId: undefined, // undefined = never chosen → auto-detect a virtual cable
@@ -92,6 +96,9 @@ function pushSystem() {
       `clean=${state.g.clean}`, // after the preset values: the last one wins
       `ns=${state.g.ns}`,
       `nsengine=${state.nsEngine}`,
+      `playid=${state.playId}`,
+      `playstop=${state.playStop}`,
+      `clipgain=${state.clipGain}`,
       `pop=${state.g.pop}`,
       `dereverb=${state.g.dereverb}`,
       `mute=${state.mute ? 1 : 0}`,
@@ -524,6 +531,107 @@ sampleBtn.addEventListener('click', async () => {
   liveStatus();
 });
 
+/* ───────── Soundboard ─────────
+ * A pad decodes its file to mono 48 kHz, hands it to the module (which mixes it into the
+ * microphone for every program) and plays the same thing to the user's own headphones. */
+const padsEl = $('#pads');
+let padContext = null;
+let padSource = null;
+
+function renderPads() {
+  padsEl.replaceChildren(
+    ...state.pads.map((pad) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pad';
+      b.textContent = pad.name;
+      b.title = `${pad.name} — правый клик, чтобы убрать`;
+      b.addEventListener('click', () => playPad(pad));
+      b.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (!confirm(`Убрать звук «${pad.name}»?`)) return;
+        state.pads = state.pads.filter((p) => p !== pad);
+        window.auraSystem.removeSound(pad.id);
+        save();
+        renderPads();
+      });
+      return b;
+    })
+  );
+  $('#padsEmpty').hidden = state.pads.length > 0;
+}
+
+function stopLocalPad() {
+  try {
+    padSource?.stop();
+  } catch {}
+  padSource = null;
+}
+
+async function playPad(pad) {
+  if (!sys.installed || !engine.running) return flash('Звуки идут через модуль: встройте Aura в микрофон и включите сферу.', true);
+  const bytes = await window.auraSystem.readSound(pad.id);
+  if (!bytes) return flash('Файл этого звука не найден.', true);
+  let decoded;
+  try {
+    // An offline context at 48 kHz resamples whatever the file is to the rate the module wants.
+    decoded = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  } catch {
+    return flash('Не получилось прочитать этот файл как звук.', true);
+  }
+  const length = Math.min(decoded.length, 48000 * 20); // at most 20 seconds
+  const mono = new Float32Array(length);
+  for (let c = 0; c < decoded.numberOfChannels; c++) {
+    const data = decoded.getChannelData(c);
+    for (let i = 0; i < length; i++) mono[i] += data[i] / decoded.numberOfChannels;
+  }
+  let peak = 0;
+  for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(mono[i]));
+  if (peak > 0) for (let i = 0; i < length; i++) mono[i] *= 0.7 / peak; // every pad equally loud
+
+  if (!(await window.auraSystem.writeClip(mono))) return flash('Не удалось передать звук модулю.', true);
+  state.playId++;
+  save();
+  pushSystem();
+
+  stopLocalPad();
+  padContext ??= new AudioContext({ sampleRate: 48000 });
+  await padContext.setSinkId(state.monitorId || '').catch(() => {});
+  const buffer = padContext.createBuffer(1, length, 48000);
+  buffer.copyToChannel(mono, 0);
+  const gain = padContext.createGain();
+  gain.gain.value = (state.clipGain / 100) * 0.8;
+  padSource = padContext.createBufferSource();
+  padSource.buffer = buffer;
+  padSource.connect(gain).connect(padContext.destination);
+  padSource.start();
+}
+
+$('#padAdd').addEventListener('click', async () => {
+  const added = await window.auraSystem.addSounds();
+  if (!added?.length) return;
+  state.pads.push(...added);
+  save();
+  renderPads();
+});
+$('#padStop').addEventListener('click', () => {
+  state.playStop++;
+  save();
+  pushSystem();
+  stopLocalPad();
+});
+{
+  const volume = $('#padVolume');
+  volume.value = state.clipGain;
+  fill(volume);
+  volume.addEventListener('input', () => {
+    state.clipGain = Number(volume.value);
+    fill(volume);
+    save();
+    pushSystem();
+  });
+}
+
 /* ───────── Noise-suppression engine ───────── */
 const engineSelect = $('#nsEngine');
 function renderEngine() {
@@ -719,6 +827,7 @@ function drawOrb() {
 async function boot() {
   $('#mute').disabled = true; // until the module is known to be installed
   renderEngine();
+  renderPads();
   renderPreset();
   renderSliders();
   renderPower();

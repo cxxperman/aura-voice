@@ -217,6 +217,29 @@ select option { background: #1c1c22; color: #fff; }
   .card, .presets, .pill { backdrop-filter: none; background: #1a1a20; }
 }
 
+/* ───────── Soundboard ───────── */
+.soundboard { flex: none; padding: 16px 18px 18px 22px; }
+.soundboard-head { display: flex; align-items: center; gap: 12px; }
+.soundboard-head b { font-weight: 600; margin-right: auto; }
+.pad-volume { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-2); }
+.pad-volume input { width: 120px; }
+.pill.small { height: 30px; padding: 0 14px; font-size: 13px; }
+.pads { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 14px; }
+.pads:empty { display: none; }
+.pad {
+  height: 44px; padding: 0 12px; border-radius: 12px;
+  border: 1px solid var(--glass-edge); border-top-color: var(--glass-top);
+  background: rgba(255, 255, 255, 0.08); color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease;
+}
+.pad:hover { background: rgba(255, 255, 255, 0.14); }
+.pad:active { transform: scale(0.95); background: var(--accent-soft); transition-duration: 70ms; }
+.pad:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pads-empty { margin-top: 10px; font-size: 12px; line-height: 1.5; color: var(--text-3); }
+.pads-empty[hidden] { display: none; }
+
 /* ───────── System module ───────── */
 .system { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 18px 16px 22px; }
 .system[hidden] { display: none; }

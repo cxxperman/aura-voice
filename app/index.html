@@ -50,6 +50,17 @@
         <label class="switch"><span><b>Слышать себя</b><small>Только в наушниках, иначе будет эхо</small></span><input type="checkbox" id="monitor"><i></i></label>
       </div>
 
+      <div class="card soundboard">
+        <div class="soundboard-head">
+          <b>Звуки</b>
+          <label class="pad-volume"><span>Громкость</span><input type="range" id="padVolume" min="0" max="100" step="1"></label>
+          <button type="button" class="pill small" id="padStop">Стоп</button>
+          <button type="button" class="pill small" id="padAdd">Добавить</button>
+        </div>
+        <div class="pads" id="pads"></div>
+        <p class="pads-empty" id="padsEmpty">Добавьте файлы mp3, wav или ogg. Нажатие проиграет звук в микрофон — его услышат все программы — и вам в наушники.</p>
+      </div>
+
       <div class="card system" id="systemCard" hidden>
         <div><b id="sysTitle"></b><small id="sysText"></small></div>
         <div class="system-actions">

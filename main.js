@@ -1,5 +1,6 @@
 const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog } = require('electron');
 const { execFile } = require('child_process');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 
@@ -81,6 +82,60 @@ function createWindow() {
     }, probeMode ? 10000 : 4500);
   }
 }
+
+/* ───── Soundboard files ─────
+ * Sounds the user adds are copied into the app's own folder under a random name, so pads keep
+ * working when the original file moves, and the page can only ever ask for files from there. */
+const soundsDir = () => path.join(app.getPath('userData'), 'sounds');
+const soundId = /^[0-9a-f-]{36}\.(mp3|wav|ogg|m4a|flac|opus)$/;
+
+ipcMain.handle('sounds:add', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Добавить звуки',
+    filters: [{ name: 'Звуки', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'opus'] }],
+    properties: ['openFile', 'multiSelections'],
+  });
+  if (canceled) return [];
+  fs.mkdirSync(soundsDir(), { recursive: true });
+  const added = [];
+  for (const file of filePaths.slice(0, 50)) {
+    try {
+      const ext = path.extname(file).toLowerCase();
+      const id = crypto.randomUUID() + ext;
+      if (!soundId.test(id) || fs.statSync(file).size > 30e6) continue;
+      fs.copyFileSync(file, path.join(soundsDir(), id));
+      added.push({ id, name: path.basename(file, path.extname(file)).slice(0, 40) });
+    } catch {}
+  }
+  return added;
+});
+ipcMain.handle('sounds:read', (_e, id) => {
+  if (typeof id !== 'string' || !soundId.test(id)) return null;
+  try {
+    return fs.readFileSync(path.join(soundsDir(), id));
+  } catch {
+    return null;
+  }
+});
+ipcMain.handle('sounds:remove', (_e, id) => {
+  if (typeof id !== 'string' || !soundId.test(id)) return false;
+  try {
+    fs.rmSync(path.join(soundsDir(), id), { force: true });
+  } catch {}
+  return true;
+});
+// The decoded clip for the module: raw mono float32 at 48 kHz, at most 20 seconds.
+ipcMain.handle('sounds:clip', (_e, samples) => {
+  if (!(samples instanceof Float32Array) || samples.length === 0 || samples.length > 48000 * 20) return false;
+  try {
+    const tmp = path.join(dataDir, 'clip.tmp');
+    fs.writeFileSync(tmp, Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength));
+    fs.renameSync(tmp, path.join(dataDir, 'clip.pcm'));
+    return true;
+  } catch {
+    return false;
+  }
+});
 
 /* ───── Preset files ───── */
 const presetFilter = [{ name: 'Пресет Aura', extensions: ['json'] }];
