@@ -126,34 +126,57 @@ bool isFloat32(const UNCOMPRESSEDAUDIOFORMAT& f) {
          f.dwValidBitsPerSample == 32 && f.dwSamplesPerFrame >= 1 && f.dwSamplesPerFrame <= 8;
 }
 
-class AuraApo final : public IAudioProcessingObject,
+// The audio engine creates effects *aggregated*: as an inner part of its own COM object.
+// The inner object then needs a private IUnknown, while every public interface forwards
+// QueryInterface/AddRef/Release to the outer object.
+struct INonDelegatingUnknown {
+  virtual HRESULT STDMETHODCALLTYPE NonDelegatingQueryInterface(REFIID iid, void** out) = 0;
+  virtual ULONG STDMETHODCALLTYPE NonDelegatingAddRef() = 0;
+  virtual ULONG STDMETHODCALLTYPE NonDelegatingRelease() = 0;
+};
+
+class AuraApo final : public INonDelegatingUnknown,
+                      public IAudioProcessingObject,
                       public IAudioProcessingObjectRT,
                       public IAudioProcessingObjectConfiguration,
                       public IAudioSystemEffects {
  public:
-  AuraApo() { gObjects++; }
+  explicit AuraApo(IUnknown* outer)
+      : outer_(outer ? outer : reinterpret_cast<IUnknown*>(static_cast<INonDelegatingUnknown*>(this))) {
+    gObjects++;
+  }
   ~AuraApo() {
     if (locked_) watchRelease();
     gObjects--;
   }
 
-  // IUnknown
-  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+  // Private IUnknown: the real reference count and interface table.
+  STDMETHODIMP NonDelegatingQueryInterface(REFIID iid, void** out) override {
     if (!out) return E_POINTER;
-    if (iid == __uuidof(IUnknown) || iid == __uuidof(IAudioProcessingObject)) *out = static_cast<IAudioProcessingObject*>(this);
+    if (iid == __uuidof(IUnknown)) {
+      *out = static_cast<INonDelegatingUnknown*>(this);
+      NonDelegatingAddRef();
+      return S_OK;
+    }
+    if (iid == __uuidof(IAudioProcessingObject)) *out = static_cast<IAudioProcessingObject*>(this);
     else if (iid == __uuidof(IAudioProcessingObjectRT)) *out = static_cast<IAudioProcessingObjectRT*>(this);
     else if (iid == __uuidof(IAudioProcessingObjectConfiguration)) *out = static_cast<IAudioProcessingObjectConfiguration*>(this);
     else if (iid == __uuidof(IAudioSystemEffects)) *out = static_cast<IAudioSystemEffects*>(this);
     else { *out = nullptr; return E_NOINTERFACE; }
-    AddRef();
+    outer_->AddRef();
     return S_OK;
   }
-  STDMETHODIMP_(ULONG) AddRef() override { return ULONG(++ref_); }
-  STDMETHODIMP_(ULONG) Release() override {
+  STDMETHODIMP_(ULONG) NonDelegatingAddRef() override { return ULONG(++ref_); }
+  STDMETHODIMP_(ULONG) NonDelegatingRelease() override {
     const long left = --ref_;
     if (left == 0) delete this;
     return ULONG(left);
   }
+
+  // Public IUnknown: forwarded to the outer object (or to ourselves when not aggregated).
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override { return outer_->QueryInterface(iid, out); }
+  STDMETHODIMP_(ULONG) AddRef() override { return outer_->AddRef(); }
+  STDMETHODIMP_(ULONG) Release() override { return outer_->Release(); }
 
   // IAudioProcessingObject
   STDMETHODIMP Reset() override { return S_OK; }
@@ -299,6 +322,7 @@ class AuraApo final : public IAudioProcessingObject,
     return S_OK;
   }
 
+  IUnknown* const outer_;
   std::atomic<long> ref_{1};
   bool locked_ = false;
   UINT32 channels_ = 2;
@@ -324,11 +348,11 @@ class Factory final : public IClassFactory {
   STDMETHODIMP CreateInstance(IUnknown* outer, REFIID iid, void** out) override {
     if (!out) return E_POINTER;
     *out = nullptr;
-    if (outer) return CLASS_E_NOAGGREGATION;
-    AuraApo* apo = new (std::nothrow) AuraApo();
+    if (outer && iid != __uuidof(IUnknown)) return CLASS_E_NOAGGREGATION; // COM rule: an aggregator asks for IUnknown
+    AuraApo* apo = new (std::nothrow) AuraApo(outer);
     if (!apo) return E_OUTOFMEMORY;
-    const HRESULT hr = apo->QueryInterface(iid, out);
-    apo->Release();
+    const HRESULT hr = apo->NonDelegatingQueryInterface(iid, out);
+    apo->NonDelegatingRelease();
     return hr;
   }
   STDMETHODIMP LockServer(BOOL lock) override {
