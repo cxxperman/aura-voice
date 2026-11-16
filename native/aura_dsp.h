@@ -693,8 +693,8 @@ class Chain {
           loudMs_[1] += (kr * kr - loudMs_[1]) * loudCoef_;
           const float now = -0.691f + 10.0f * std::log10(loudMs_[0] + loudMs_[1] + 1e-10f);
           const float want = dbToGain(std::clamp(params_.loudTarget - now, -12.0f, 12.0f));
-          const float far = std::fabs(want / loudG_ - 1.0f);
-          loudG_ += (want - loudG_) * (far > 0.6f ? 6.0f : 1.0f) / (2.0f * sr_);
+          const float gap = std::fabs(want / loudG_ - 1.0f);
+          loudG_ += (want - loudG_) * (gap > 0.6f ? 6.0f : 1.0f) / (2.0f * sr_);
         }
         l *= loudG_;
         r *= loudG_;

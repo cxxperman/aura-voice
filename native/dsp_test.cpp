@@ -474,10 +474,10 @@ static void runEffects() {
   // Mains hum: gone when asked, untouched otherwise.
   aura::Params quietHum = flat;
   quietHum.dehum = 1;
-  const float hum = toneDb(50, quietHum) - toneDb(50, flat), near = toneDb(300, quietHum) - toneDb(300, flat);
-  std::printf("hum filter: 50 Hz %+.1f dB, 300 Hz %+.1f dB\n", hum, near);
+  const float hum = toneDb(50, quietHum) - toneDb(50, flat), beside = toneDb(300, quietHum) - toneDb(300, flat);
+  std::printf("hum filter: 50 Hz %+.1f dB, 300 Hz %+.1f dB\n", hum, beside);
   CHECK(hum < -15.0f, "the hum filter took only %.1f dB off 50 Hz", hum);
-  CHECK(std::fabs(near) < 1.0f, "the hum filter moved 300 Hz by %.1f dB", near);
+  CHECK(std::fabs(beside) < 1.0f, "the hum filter moved 300 Hz by %.1f dB", beside);
 
   // Loudness target: a quiet and a loud take of the same voice must come out close to each other.
   auto leveled = [&](float scale, float target) {
