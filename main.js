@@ -6,11 +6,12 @@ const fs = require('fs');
 // Dev-only flags: --shot=<png> saves a screenshot and quits, --test runs the DSP self-check.
 const shotArg = process.argv.find((a) => a.startsWith('--shot='));
 const testMode = process.argv.includes('--test');
+const probeMode = process.argv.includes('--probe'); // dev: switch on for one run without saving
 
 // Let the audio engine start on launch, without waiting for a click.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!shotArg && !testMode && !probeMode && !app.requestSingleInstanceLock()) app.quit();
 
 let win;
 
@@ -36,11 +37,11 @@ function createWindow() {
 
   win.removeMenu();
   win.loadFile(path.join(__dirname, 'app', 'index.html'), {
-    query: testMode ? { test: '1' } : {},
+    query: testMode ? { test: '1' } : probeMode ? { probe: '1' } : {},
   });
   win.once('ready-to-show', () => win.show());
 
-  if (shotArg || testMode) {
+  if (shotArg || testMode || probeMode) {
     win.webContents.on('console-message', (e) => {
       console.log('[renderer]', e.message);
     });
@@ -50,7 +51,7 @@ function createWindow() {
         fs.writeFileSync(shotArg.slice('--shot='.length), img.toPNG());
       }
       app.quit();
-    }, 4500);
+    }, probeMode ? 10000 : 4500);
   }
 }
 

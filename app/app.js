@@ -1,6 +1,7 @@
 const $ = (s) => document.querySelector(s);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const TEST = new URLSearchParams(location.search).has('test');
+const PROBE = new URLSearchParams(location.search).has('probe');
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const PARAMS = [
@@ -47,9 +48,9 @@ function loadState() {
   }
 }
 const state = loadState();
-if (TEST) state.on = true;
+if (TEST || PROBE) state.on = true;
 const save = () => {
-  if (!TEST) localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  if (!TEST && !PROBE) localStorage.setItem(STORE_KEY, JSON.stringify(state));
 };
 
 const engine = new Engine();
@@ -65,6 +66,7 @@ let sysBusy = false;
 let holdingOriginal = false;
 let recording = false;
 let onSince = 0;
+let startFailed = false; // the microphone would not open while the module is installed
 
 function pushSystem() {
   if (!sys.installed || TEST) return;
@@ -120,7 +122,7 @@ function renderSystem() {
   if (card.hidden) return;
 
   // Give Windows a few seconds to load the module before calling it a failure.
-  const silent = sys.installed && engine.running && !engine.sampleMode && !sys.alive && Date.now() - onSince > 6000;
+  const silent = sys.installed && (startFailed || (engine.running && !engine.sampleMode && !sys.alive && Date.now() - onSince > 6000));
   let title, text, action;
   if (!sys.installed) {
     title = 'Встроить Aura в микрофон';
@@ -128,7 +130,7 @@ function renderSystem() {
     action = 'Встроить';
   } else if (silent) {
     title = 'Windows не запустила модуль';
-    text = 'Скорее всего, мешает защищённый режим звукового процесса: у модуля нет платной подписи. Можно разрешить загрузку — это выключает защищённый режим (он нужен только для DRM-аудио) и возвращается при удалении.';
+    text = 'Пока модуль в таком состоянии, микрофон может не работать и в других программах. Скорее всего, мешает защищённый режим звукового процесса: у модуля нет платной подписи. «Разрешить» выключает этот режим (он нужен только для DRM-аудио) и возвращает его при удалении. «Убрать» просто вернёт микрофон как был.';
     action = 'Разрешить и повторить';
   } else {
     title = 'Aura встроена в микрофон';
@@ -154,6 +156,7 @@ async function runSetup(action) {
   const res = await window.auraSystem.setup(action === 'uninstall' ? 'uninstall' : 'install', action === 'unprotect');
   sysMessage = res.cancelled ? 'Отменено — ничего не изменилось.' : res.lines.join(' ') || (res.ok ? '' : 'Установщик не ответил.');
   sysBusy = false;
+  startFailed = false;
   await new Promise((r) => setTimeout(r, 1500)); // let the audio service come back
   await pollSystem();
   if (wasOn) await setPower(true);
@@ -192,6 +195,7 @@ async function setPower(on) {
       setStatus('Запускаю…');
       await engine.start(state, { test: TEST, system: sys.installed });
       onSince = Date.now();
+      startFailed = false;
       syncBypass();
       await refreshDevices();
     } else if (!on && engine.running) {
@@ -203,7 +207,8 @@ async function setPower(on) {
     await engine.stop().catch(() => {});
     state.on = false;
     const denied = err?.name === 'NotAllowedError' || err?.name === 'NotFoundError';
-    setStatus(denied ? 'Нет доступа к микрофону. Проверьте, что он подключён и разрешён в Windows.' : `Не удалось запустить звук: ${err?.message || err}`, true);
+    startFailed = sys.installed && !denied;
+    setStatus(startFailed ? 'Микрофон не открывается: Windows не смогла запустить модуль Aura.' : denied ? 'Нет доступа к микрофону. Проверьте, что он подключён и разрешён в Windows.' : `Не удалось запустить звук: ${err?.message || err}`, true);
   }
   busy = false;
   save();
