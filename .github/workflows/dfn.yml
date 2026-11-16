@@ -18,15 +18,16 @@ jobs:
           path: |
             third_party/dfn/target
             ~/.cargo/registry
-          key: dfn-0.5.6-staticlib-v1
+          key: dfn-0.5.6-staticlib-rust1.72
       - name: Build libDF as a static library
         shell: bash
         working-directory: third_party/dfn
         env:
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
-          rustc --version
-          cargo rustc -p deep_filter --release --locked --lib --features capi --crate-type staticlib -- --print native-static-libs
+          # The sources and their locked dependencies date from 2023; build them with a compiler from then.
+          rustup toolchain install 1.72.1 --profile minimal
+          cargo +1.72.1 rustc -p deep_filter --release --locked --lib --features capi --crate-type staticlib -- --print native-static-libs
           ls -la target/release/*.lib
       - name: Build the test
         shell: bash
