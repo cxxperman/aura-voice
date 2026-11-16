@@ -471,6 +471,34 @@ static void runEffects() {
   const float tilt = toneDb(100, flat) - toneDb(1000, flat), top = toneDb(8000, flat) - toneDb(1000, flat);
   std::printf("neutral chain: 100 Hz %+.1f dB, 8 kHz %+.1f dB relative to 1 kHz\n", tilt, top);
   CHECK(std::fabs(top) < 1.0f && tilt > -4.0f && tilt < 1.0f, "the chain is not flat with every band at zero (100 Hz %.1f dB, 8 kHz %.1f dB)", tilt, top);
+  // Cut before the dynamics, boost after: under heavy compression a user boost must still arrive
+  // in full, and no sample may pass the limiter's ceiling however hard it is driven.
+  aura::Params squashed = base;
+  squashed.warmth = squashed.clarity = squashed.air = 0; squashed.excite = 0; squashed.deess = 0; squashed.pop = 0;
+  squashed.autoLevel = 0; squashed.clean = 0; squashed.width = 0; squashed.space = 0; squashed.density = 1;
+  aura::Params boosted = squashed;
+  boosted.micF[6] = 1000; boosted.micG[6] = 6; boosted.micQ[6] = 1;
+  auto loudTone = [&](const aura::Params& p, float amp, float* peakOut) {
+    std::vector<float> x(48000), l(48000), r(48000);
+    for (size_t i = 0; i < x.size(); i++) x[i] = amp * std::sin(2 * aura::kPi * 1000.0f * float(i) / 48000.0f);
+    aura::Chain chain;
+    chain.prepare(48000);
+    chain.setParams(p);
+    for (size_t at = 0; at < x.size(); at += 480) chain.process(x.data() + at, l.data() + at, r.data() + at, 480);
+    float peak = 0;
+    for (float s : l) peak = std::max(peak, std::fabs(s));
+    if (peakOut) *peakOut = peak;
+    return rmsDb(l, 24000, 48000);
+  };
+  const float kept = loudTone(boosted, 0.2f, nullptr) - loudTone(squashed, 0.2f, nullptr);
+  aura::Params driven = squashed;
+  driven.density = 0; // little compression: the limiter has to do the work
+  float hot = 0;
+  loudTone(driven, 6.0f, &hot);
+  std::printf("boost behind the compressor: +6 dB asked, %+.1f dB delivered | limiter driven hard: peak %.3f\n", kept, hot);
+  CHECK(kept > 4.5f, "a +6 dB boost came out as %.1f dB: the compressor is eating it", kept);
+  CHECK(hot <= 0.80f, "the limiter let a peak of %.3f through (ceiling 0.79)", hot);
+
   // Mains hum: gone when asked, untouched otherwise.
   aura::Params quietHum = flat;
   quietHum.dehum = 1;
@@ -575,7 +603,7 @@ static void runLatency(const char* model) {
   CHECK(fast <= 480, "RNNoise is %d samples late on 10 ms buffers; it should add no buffering", fast);
   CHECK(slow > fast, "the buffered path should be the slower one (%d vs %d samples)", slow, fast);
   CHECK(room <= 300, "room echo is %d samples late", room);
-  CHECK(core <= 8, "the voice chain itself must be instant, measured %d samples", core);
+  CHECK(core >= 80 && core <= 130, "the voice chain should cost its limiter's 2 ms of look-ahead and nothing more, measured %d samples", core);
 #ifdef AURA_HAVE_DFN
   if (model) {
     y = x;

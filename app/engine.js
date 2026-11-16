@@ -154,7 +154,9 @@ class VoiceDynamics extends AudioWorkletProcessor {
       this.lp += (x - this.lp) * lpA;
       const hi = x - this.lp;
       this.envHi = Math.max(Math.abs(hi), this.envHi * hiRel);
-      const td = de > 0 && this.envHi > deThr ? Math.pow(deThr / this.envHi, de * 0.75) : 1;
+      this.envAll = Math.max(Math.abs(x), (this.envAll || 0) * hiRel);
+      const share = this.envHi / (this.envAll + 1e-9); // sibilance = the top band dominating the voice, at any level
+      const td = de > 0 && this.envHi > 0.004 && share > 0.3 ? Math.pow(0.3 / share, de * 1.2) : 1;
       this.dg += (td - this.dg) * 0.02;
       let y = this.lp + hi * this.dg;
       if (fxOn) {
@@ -289,8 +291,8 @@ class Engine {
 
     n.comp = c.createDynamicsCompressor();
     n.comp.knee.value = 10;
-    n.comp.attack.value = 0.004;
-    n.comp.release.value = 0.18;
+    n.comp.attack.value = 0.008;
+    n.comp.release.value = 0.25;
     n.makeup = gain();
 
     // Exciter: harmonics generated from the top of the voice, blended back in.
@@ -414,8 +416,8 @@ class Engine {
     set(n.air.gain, 0);
     set(n.exGain.gain, (v.excite ?? 0.3) * 0.34);
 
-    const thr = -12 - 26 * v.density;
-    const ratio = 2 + 5 * v.density;
+    const thr = -14 - 20 * v.density;
+    const ratio = 1.8 + 2.4 * v.density;
     set(n.comp.threshold, thr);
     set(n.comp.ratio, ratio);
     // The browser's compressor adds its own make-up gain (~0.6 × the full-scale reduction);

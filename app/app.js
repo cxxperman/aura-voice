@@ -40,12 +40,12 @@ PARAMS.push(...FREQS);
 
 // A preset is a frequency curve (the eight bands, dB) plus processing. Bands left out are flat.
 const PRESETS = {
-  studio: { name: 'Студия', hue: 212, v: { density: 55, multiband: 30, sat: 20, excite: 30, deess: 50, space: 12, width: 35, pitch: 0 }, eq: { f100: 3, f400: -2, f3200: 3, f11000: 4 } },
-  radio: { name: 'Радио', hue: 28, v: { density: 85, multiband: 70, sat: 45, excite: 35, deess: 60, space: 5, width: 20, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f1600: 1, f3200: 4, f11000: 3 } },
-  velvet: { name: 'Бархат', hue: 278, v: { density: 60, multiband: 40, sat: 50, excite: 15, deess: 70, space: 20, width: 45, pitch: 0 }, eq: { f100: 6, f200: 2, f400: -3, f3200: 1, f6000: -2, f11000: 2 } },
-  crystal: { name: 'Кристалл', hue: 176, v: { density: 45, multiband: 30, sat: 10, excite: 45, deess: 65, space: 18, width: 50, pitch: 0 }, eq: { f100: 1, f400: -2, f3200: 4, f6000: 2, f11000: 7 } },
-  cinema: { name: 'Кино', hue: 348, v: { density: 70, multiband: 50, sat: 40, excite: 25, deess: 55, space: 40, width: 70, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f800: -1, f3200: 3, f11000: 4 } },
-  whisper: { name: 'Шёпот', hue: 140, v: { density: 95, multiband: 40, sat: 20, excite: 40, deess: 80, space: 10, width: 60, pitch: 0 }, eq: { f100: 2, f400: -1, f3200: 3, f6000: 3, f11000: 8 } },
+  studio: { name: 'Студия', hue: 212, v: { density: 55, multiband: 30, sat: 20, excite: 30, deess: 50, space: 0, width: 20, pitch: 0 }, eq: { f100: 3, f400: -2, f3200: 3, f11000: 4 } },
+  radio: { name: 'Радио', hue: 28, v: { density: 85, multiband: 70, sat: 45, excite: 35, deess: 60, space: 0, width: 0, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f1600: 1, f3200: 4, f11000: 3 } },
+  velvet: { name: 'Бархат', hue: 278, v: { density: 60, multiband: 40, sat: 50, excite: 15, deess: 70, space: 8, width: 45, pitch: 0 }, eq: { f100: 6, f200: 2, f400: -3, f3200: 1, f6000: -2, f11000: 2 } },
+  crystal: { name: 'Кристалл', hue: 176, v: { density: 45, multiband: 30, sat: 10, excite: 45, deess: 65, space: 6, width: 50, pitch: 0 }, eq: { f100: 1, f400: -2, f3200: 4, f6000: 2, f11000: 7 } },
+  cinema: { name: 'Кино', hue: 348, v: { density: 70, multiband: 50, sat: 40, excite: 25, deess: 55, space: 25, width: 70, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f800: -1, f3200: 3, f11000: 4 } },
+  whisper: { name: 'Шёпот', hue: 140, v: { density: 95, multiband: 40, sat: 20, excite: 40, deess: 80, space: 0, width: 30, pitch: 0 }, eq: { f100: 2, f400: -1, f3200: 3, f6000: 3, f11000: 8 } },
   custom: { name: 'Свой', hue: 44, v: null, eq: null }, // whatever the user last dialled in by hand
 };
 
@@ -194,7 +194,9 @@ function micEq() {
 function eqBands() {
   const mic = micEq();
   const own = FREQS.filter((p) => state.eq[p.id]).map((p) => [p.f, state.eq[p.id], p.q]);
-  return { hp: mic.hp, bands: [...mic.bands.slice(0, 6), ...own] };
+  // Fixed places: the profile in 0-5, your bands from 6 on — the module puts boosts among those behind the compressor.
+  const profile = Array.from({ length: 6 }, (_, i) => mic.bands[i] || [0, 0, 0]);
+  return { hp: mic.hp, bands: [...profile, ...own] };
 }
 const hzText = (f) => (f >= 1000 ? `${String(f / 1000).replace('.', ',')} кГц` : `${f} Гц`);
 const dbText = (g) => `${g > 0 ? '+' : '−'}${String(Math.abs(g)).replace('.', ',')} дБ`;

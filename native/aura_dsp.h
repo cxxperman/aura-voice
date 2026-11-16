@@ -126,7 +126,7 @@ struct Dynamics {
   float env = 0, g = 1, hold = 0;
   bool open = false;
   float rms = 0.01f, ag = 1;
-  float lp = 0, envHi = 0, dg = 1;
+  float lp = 0, envHi = 0, envAll = 0, dg = 1;
   float lo = 0, envLo = 0, pg = 1;
   float envRel = 0, gAtt = 0, gRel = 0, holdN = 0, rmsA = 0, agA = 0, lpA = 0, hiRel = 0, loA = 0, loRel = 0;
 
@@ -183,8 +183,36 @@ struct Dynamics {
     lp += (x - lp) * lpA;
     const float hi = x - lp;
     envHi = std::max(std::fabs(hi), envHi * hiRel);
-    const float deThr = 0.02f;
-    const float td = (deess > 0 && envHi > deThr) ? std::pow(deThr / envHi, deess * 0.75f) : 1.0f;
+    envAll = std::max(std::fabs(x), envAll * hiRel);
+    // Sibilance is the top band *dominating* the voice, whatever the level: in an "s" it is nearly
+    // all of the signal, in a vowel a small part. So the trigger is the share of the top band,
+    // and a quiet or a loud talker is de-essed alike. Up to ~6 dB at the default, ~12 at full.
+    const float share = envHi / (envAll + 1e-9f);
+    const float td = (deess > 0 && envHi > 0.004f && share > 0.3f) ? std::pow(0.3f / share, deess * 1.2f) : 1.0f;
+    dg += (td - dg) * 0.02f;
+    return lp + hi * dg;
+  }
+};
+
+// De-esser, placed after everything that sharpens the voice. Compression, treble boosts and the
+// exciter all exaggerate sibilance, so broadcast practice puts the de-esser behind them (Orban).
+// The trigger is the share of the top band in the whole signal — as in the dbx 286s — so it does
+// not depend on level. Up to ~6 dB at the default amount, ~12 at full.
+struct DeEsser {
+  float lp = 0, envHi = 0, envAll = 0, dg = 1, lpA = 0, rel = 0;
+  void prepare(float sr) {
+    lpA = 1.0f - std::exp(-2.0f * kPi * std::min(5200.0f, 0.4f * sr) / sr);
+    rel = std::exp(-1.0f / (0.03f * sr));
+    lp = envHi = envAll = 0;
+    dg = 1;
+  }
+  inline float process(float x, float amount) {
+    lp += (x - lp) * lpA;
+    const float hi = x - lp;
+    envHi = std::max(std::fabs(hi), envHi * rel);
+    envAll = std::max(std::fabs(x), envAll * rel);
+    const float share = envHi / (envAll + 1e-9f);
+    const float td = (amount > 0 && envHi > 0.004f && share > 0.3f) ? std::pow(0.3f / share, amount * 1.2f) : 1.0f;
     dg += (td - dg) * 0.02f;
     return lp + hi * dg;
   }
@@ -516,8 +544,13 @@ class Chain {
  public:
   void prepare(float sampleRate) {
     sr_ = sampleRate;
-    hpf_.highpass(sr_, 85, 0.707f);
+    hpf_.highpass(sr_, 85, 0.5412f);
+    hpf2_ = Biquad();
+    hpf2_.highpass(sr_, 85, 1.3066f);
     exIn_.highpass(sr_, 3000, 0.707f);
+    exLp_ = Biquad();
+    exLp_.lowpass(sr_, 7000, 0.707f);
+    deEss_.prepare(sr_);
     exOut_.highpass(sr_, 3000, 0.707f);
     for (int i = 0; i < 3; i++) { hum_[i] = Biquad(); hum_[i].notch(sr_, 50.0f * float(i + 1), 18.0f); }
     // Three bands, split by 4th-order Linkwitz-Riley crossovers (two Butterworth sections each).
@@ -548,8 +581,18 @@ class Chain {
     delay_.assign(size_t(0.05f * sr_) + 8, 0.0f);
     delayPos_ = 0;
     smooth_ = onePole(0.03f, sr_);
-    compAtt_ = onePole(0.004f, sr_);
-    compRel_ = onePole(0.18f, sr_);
+    compAtt_ = onePole(0.008f, sr_); // lets the first milliseconds of consonants through
+    compRel_ = onePole(0.25f, sr_); // 0.2-0.6 s is the textbook range for voice; faster pumps and lifts the room
+    compEnvAtt_ = onePole(0.0005f, sr_);
+    compEnvRel_ = onePole(0.025f, sr_);
+    compEnv_ = 0;
+    look_ = std::max(8, int(0.002f * sr_));
+    laL_.assign(size_t(look_), 0.0f);
+    laR_.assign(size_t(look_), 0.0f);
+    laPos_ = 0;
+    limMin_ = 1;
+    limHold_ = 0;
+    limAtt_ = onePole(0.00035f, sr_);
     limRel_ = onePole(0.06f, sr_);
     compDb_ = 0;
     limG_ = 1;
@@ -565,11 +608,18 @@ class Chain {
     if (hasParams_ && std::memcmp(&p, &params_, sizeof(Params)) == 0) return;
     params_ = p;
     hasParams_ = true;
-    hpf_.highpass(sr_, std::clamp(p.micHp, 40.0f, 200.0f), 0.707f);
+    // 24 dB per octave (two Butterworth sections): rumble and plosive thumps go, and a bass boost
+    // above it does not lift what is underneath.
+    hpf_.highpass(sr_, std::clamp(p.micHp, 40.0f, 200.0f), 0.5412f);
+    hpf2_.highpass(sr_, std::clamp(p.micHp, 40.0f, 200.0f), 1.3066f);
     for (int i = 0; i < Params::kMicBands; i++) {
       const bool used = std::fabs(p.micG[i]) > 0.05f && p.micF[i] >= 20.0f;
       if (used && !micOn_[i]) mic_[i].reset();
       micOn_[i] = used;
+      // The engineer's rule: cut before the dynamics, boost after. A boost ahead of the compressor
+      // is partly taken back by it and makes it pump; the user's own bands (6 and up) that boost go
+      // behind the compressor. The microphone profile (0-5) and all cuts stay in front.
+      micPost_[i] = used && i >= 6 && p.micG[i] > 0;
       if (!used) continue;
       const float f = std::clamp(p.micF[i], 20.0f, 20000.0f), g = std::clamp(p.micG[i], -18.0f, 18.0f);
       if (p.micQ[i] < 0.05f) { if (f < 1000.0f) mic_[i].lowshelf(sr_, f, g); else mic_[i].highshelf(sr_, f, g); }
@@ -580,8 +630,8 @@ class Chain {
     pres_.peaking(sr_, 3600, 0.9f, p.clarity * 6.0f);
     air_.highshelf(sr_, 10500, p.air * 9.0f);
     exT_ = p.excite >= 0.0f ? p.excite * 0.34f : p.clarity * 0.22f + p.air * 0.12f;
-    thrDb_ = -12.0f - 26.0f * p.density;
-    ratio_ = 2.0f + 5.0f * p.density;
+    thrDb_ = -14.0f - 20.0f * p.density; // voice practice: 2:1 … 4:1, a few dB of reduction, not a brick wall
+    ratio_ = 1.8f + 2.4f * p.density;
     // Give back part of what the compressor takes, so "density" thickens rather than just gets louder.
     makeupT_ = dbToGain(0.3f * -thrDb_ * (1.0f - 1.0f / ratio_));
     widthT_ = p.width * 0.55f;
@@ -602,7 +652,7 @@ class Chain {
   }
 
   float gainReductionDb() const { return compDb_; }
-  int latency() const { return useNatural_ ? natural_.latency() : 0; } // samples; everything else in the chain is immediate
+  int latency() const { return look_ + (useNatural_ ? natural_.latency() : 0); } // samples: the limiter's look-ahead, plus the pitch shifter when in use
 
   // `in` may alias `outL` (in-place).
   void process(const float* in, float* outL, float* outR, int frames) {
@@ -623,10 +673,10 @@ class Chain {
 
       float x = in[n] * inG_;
       if (useNatural_) x = natural_.process(x, pitchRatio_, formantRatio_);
-      x = hpf_.process(x);
+      x = hpf2_.process(hpf_.process(x));
       if (params_.dehum > 0.5f) x = hum_[2].process(hum_[1].process(hum_[0].process(x)));
-      for (int i = 0; i < Params::kMicBands; i++) if (micOn_[i]) x = mic_[i].process(x);
-      x = dyn_.process(x, gateThr_, deess, autoLevel, params_.pop);
+      for (int i = 0; i < Params::kMicBands; i++) if (micOn_[i] && !micPost_[i]) x = mic_[i].process(x);
+      x = dyn_.process(x, gateThr_, 0.0f, autoLevel, params_.pop); // de-essing happens at the end of the path
       x = air_.process(pres_.process(low_.process(mud_.process(x))));
 
       // "Broadcast": compress the lows, the middle and the top on their own, so the bass does not
@@ -657,15 +707,22 @@ class Chain {
       }
 
       // Soft-knee feed-forward compressor, no look-ahead (adds no latency).
-      const float over = 20.0f * std::log10(std::fabs(x) + 1e-9f) - thrDb_;
+      // Level detector: follows the envelope, not the waveform, so the gain does not wobble inside
+      // each pitch period (which is heard as roughness on low voices).
+      const float mag = std::fabs(x);
+      compEnv_ += (mag - compEnv_) * (mag > compEnv_ ? compEnvAtt_ : compEnvRel_);
+      const float over = 20.0f * std::log10(compEnv_ + 1e-9f) - thrDb_;
       float target = 0;
       if (2 * over > knee) target = slope * over;
       else if (2 * over > -knee) target = slope * (over + knee / 2) * (over + knee / 2) / (2 * knee);
       compDb_ += (target - compDb_) * (target < compDb_ ? compAtt_ : compRel_);
       x *= dbToGain(compDb_) * makeup_;
+      // Exciter: harmonics from the top of the voice, taken before the tonal boosts (so boosted hiss
+      // and sibilance are not multiplied) and from 3-7 kHz only (so their overtones stay below Nyquist).
+      const float harmonics = exOut_.process(std::tanh(exLp_.process(exIn_.process(x)) * 6.0f)) * exG_;
+      for (int i = 6; i < Params::kMicBands; i++) if (micPost_[i]) x = mic_[i].process(x); // tonal boosts
 
-      // Exciter: harmonics from the top of the voice, blended back in.
-      const float t = fx_.process(x + exOut_.process(std::tanh(exIn_.process(x) * 6.0f)) * exG_);
+      const float t = fx_.process(deEss_.process(x + harmonics, deess));
 
       // Doubler: two slowly drifting taps panned apart.
       delay_[size_t(delayPos_)] = t;
@@ -704,12 +761,25 @@ class Chain {
         r *= loudG_;
       }
 
-      // Stereo-linked limiter: instant attack, 60 ms release.
+      // Stereo-linked look-ahead limiter. The sound is held back 2 ms, so the gain is already down
+      // when a peak arrives: no clipped fronts, which an instant limiter cannot avoid. The lowest
+      // gain any sample still in the line needs is held until that sample has left.
       const float peak = std::max(std::fabs(l), std::fabs(r));
       const float want = peak > ceiling ? ceiling / peak : 1.0f;
-      limG_ = want < limG_ ? want : limG_ + (want - limG_) * limRel_;
-      outL[n] = std::clamp(l * limG_ * outG_, -1.0f, 1.0f);
-      outR[n] = std::clamp(r * limG_ * outG_, -1.0f, 1.0f);
+      if (want <= limMin_) { limMin_ = want; limHold_ = look_ + 2; }
+      else if (--limHold_ <= 0) { limMin_ = want; limHold_ = 0; }
+      limG_ += (limMin_ - limG_) * (limMin_ < limG_ ? limAtt_ : limRel_);
+      const float dl = laL_[size_t(laPos_)], dr = laR_[size_t(laPos_)];
+      laL_[size_t(laPos_)] = l;
+      laR_[size_t(laPos_)] = r;
+      if (++laPos_ >= look_) laPos_ = 0;
+      // The smoothed gain is all but there when the peak comes out; what little is left is taken
+      // on the spot, so the ceiling holds exactly.
+      float lg = limG_;
+      const float late = std::max(std::fabs(dl), std::fabs(dr));
+      if (late * lg > ceiling) lg = ceiling / late;
+      outL[n] = std::clamp(dl * lg * outG_, -1.0f, 1.0f);
+      outR[n] = std::clamp(dr * lg * outG_, -1.0f, 1.0f);
     }
   }
 
@@ -731,7 +801,12 @@ class Chain {
   Biquad hum_[3], xLoLp_[2], xLoHp_[2], xHiLp_[2], xHiHp_[2], kShelf_[2], kHigh_[2], satLp_, satHp_, satTop_;
   float mbEnv_[3] = {}, mbG_[3] = {1, 1, 1}, mbAtt_[3] = {}, mbRel_[3] = {}, mbAmt_ = 0, satAmt_ = 0;
   float loudMs_[2] = {}, loudG_ = 1, loudCoef_ = 0;
-  bool micOn_[Params::kMicBands] = {};
+  bool micOn_[Params::kMicBands] = {}, micPost_[Params::kMicBands] = {};
+  Biquad hpf2_, exLp_;
+  DeEsser deEss_;
+  std::vector<float> laL_, laR_;
+  int look_ = 96, laPos_ = 0, limHold_ = 0;
+  float limMin_ = 1, limAtt_ = 0, compEnv_ = 0, compEnvAtt_ = 0, compEnvRel_ = 0;
   Dynamics dyn_;
   Room room_;
   PitchShifter pitch_;
