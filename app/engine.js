@@ -15,6 +15,7 @@ class VoiceDynamics extends AudioWorkletProcessor {
       { name: 'auto',  defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
       { name: 'pop',   defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
       { name: 'pitch', defaultValue: 0,    minValue: -14,  maxValue: 14, automationRate: 'k-rate' },
+      { name: 'timbre', defaultValue: 0,   minValue: -5,   maxValue: 5,  automationRate: 'k-rate' },
       ...['fxring', 'fxringmix', 'fxdrive', 'fxphone', 'fxtrem', 'fxtremdepth', 'fxecho', 'fxechofb', 'fxechomix', 'fxlp'].map((name) => ({ name, defaultValue: 0, automationRate: 'k-rate' })),
     ];
   }
@@ -24,15 +25,71 @@ class VoiceDynamics extends AudioWorkletProcessor {
     this.rms = 0.01; this.ag = 1;                                  // auto-level
     this.lp = 0; this.envHi = 0; this.dg = 1;                      // de-esser
     this.lo = 0; this.envLo = 0; this.pg = 1;                      // de-plosive
-    this.pb = new Float32Array(4096); this.pp = 0; this.ph = 0;    // pitch shifter
+    // Pitch shifter (pitch-synchronous overlap-add), the twin of NaturalShifter in native/aura_dsp.h.
+    this.nMin = (sampleRate / 400) | 0; this.nMax = (sampleRate / 80) | 0; this.nLat = ((this.nMax * 2.9) | 0) + 8;
+    this.nIn = new Float32Array(16384); this.nOut = new Float32Array(16384); this.nScore = new Float32Array(this.nMax);
+    this.nN = 0; this.nP = sampleRate / 150; this.nSynth = 0; this.nSrc = 0;
     this.eb = new Float32Array(32768); this.ep = 0;                 // effects: echo line
     this.rp = 0; this.tp = 0; this.f1 = 0; this.f2 = 0; this.uw = 0; // effects: oscillators and filters
   }
-  tap(delay) {
-    let at = this.pp - delay;
-    if (at < 0) at += 4096;
-    const i = at | 0, f = at - i;
-    return this.pb[i & 4095] * (1 - f) + this.pb[(i + 1) & 4095] * f;
+  correlate(lag, window, step) {
+    const b = this.nIn, n = this.nN;
+    let c = 0, e0 = 1e-9, e1 = 1e-9;
+    for (let i = 0; i < window; i += step) {
+      const x = b[(n - i) & 16383], y = b[(n - i - lag) & 16383];
+      c += x * y; e0 += x * x; e1 += y * y;
+    }
+    return c / Math.sqrt(e0 * e1);
+  }
+  // The pitch period: a coarse sweep finds the neighbourhood, a fine one the period.
+  measure() {
+    const window = this.nMax * 2, b = this.nIn, n = this.nN, s = this.nScore;
+    let e0 = 0;
+    for (let i = 0; i < window; i += 4) e0 += b[(n - i) & 16383] * b[(n - i) & 16383];
+    if (e0 < 5e-8 * window) return;
+    let best = 0, count = 0;
+    for (let lag = this.nMin; lag <= this.nMax; lag += 4, count++) {
+      s[count] = this.correlate(lag, window, 4);
+      if (s[count] > best) best = s[count];
+    }
+    if (best < 0.4) return;
+    for (let j = 1; j + 1 < count; j++) {
+      if (s[j] >= 0.88 * best && s[j] >= s[j - 1] && s[j] >= s[j + 1]) {
+        const around = this.nMin + 4 * j, fine = [];
+        for (let d = 0; d < 9; d++) fine.push(this.correlate(around + d - 4, window, 2));
+        let top = 1;
+        for (let d = 2; d < 8; d++) if (fine[d] > fine[top]) top = d;
+        const a = fine[top - 1], m = fine[top], c = fine[top + 1];
+        const shift = Math.max(-0.5, Math.min(0.5, (a - c) / (2 * (a - 2 * m + c) - 1e-9)));
+        this.nP += (around + top - 4 + shift - this.nP) * 0.6;
+        return;
+      }
+    }
+  }
+  // One grain, two periods long: where it is laid sets the pitch, how fast it is read sets the timbre.
+  grain(ratio, formant) {
+    const P = this.nP, half = P | 0, gain = 1 / Math.max(ratio, 0.5), centre = Math.round(this.nSynth);
+    this.nSrc += Math.max(0, Math.floor((this.nSynth - this.nSrc) / P + 0.5)) * P;
+    for (let i = -half; i <= half; i++) {
+      const at = centre + i;
+      if (at <= this.nN - this.nLat) continue;
+      const where = this.nSrc + i * formant;
+      if (where < 0 || where > this.nN - 1) continue;
+      const i0 = Math.floor(where), f = where - i0;
+      const v = this.nIn[i0 & 16383] * (1 - f) + this.nIn[(i0 + 1) & 16383] * f;
+      this.nOut[at & 16383] += v * (0.5 + 0.5 * Math.cos(Math.PI * i / half)) * gain;
+    }
+    this.nSynth += P / Math.max(ratio, 0.5);
+  }
+  shift(x, ratio, formant) {
+    this.nIn[this.nN & 16383] = x;
+    if ((this.nN & 255) === 255) this.measure();
+    while (this.nSynth + this.nP * (0.5 + formant) + 2 <= this.nN) this.grain(ratio, formant);
+    const m = this.nN - this.nLat;
+    let y = 0;
+    if (m >= 0) { y = this.nOut[m & 16383]; this.nOut[m & 16383] = 0; }
+    this.nN++;
+    return y;
   }
   process(inputs, outputs, p) {
     const input = inputs[0][0], out = outputs[0][0];
@@ -40,7 +97,8 @@ class VoiceDynamics extends AudioWorkletProcessor {
     const sr = sampleRate;
     const thr = Math.pow(10, p.gate[0] / 20), thrClose = thr * 0.63; // 4 dB of hysteresis
     const de = p.deess[0], auto = p.auto[0] > 0.5, pop = p.pop[0];
-    const ratio = Math.abs(p.pitch[0]) < 0.01 ? 1 : Math.pow(2, p.pitch[0] / 12), win = 0.045 * sr;
+    const ratio = Math.abs(p.pitch[0]) < 0.01 ? 1 : Math.pow(2, p.pitch[0] / 12), formant = Math.pow(2, p.timbre[0] / 12);
+    const shifting = ratio !== 1 || Math.abs(p.timbre[0]) > 0.01;
     // Ready voices, mirrored from the module so a recorded sample can be auditioned with them.
     const ringMix = p.fxring[0] > 0 ? p.fxringmix[0] : 0, ringStep = 2 * Math.PI * p.fxring[0] / sr;
     const drive = p.fxdrive[0], phone = p.fxphone[0] > 0.5;
@@ -61,17 +119,7 @@ class VoiceDynamics extends AudioWorkletProcessor {
 
     for (let n = 0; n < input.length; n++) {
       let x = input[n];
-      if (ratio !== 1) {
-        // Two taps sweep a short delay line and cross-fade where one has to jump back.
-        this.pb[this.pp] = x;
-        this.ph += (1 - ratio) / win;
-        if (this.ph >= 1) this.ph -= 1;
-        if (this.ph < 0) this.ph += 1;
-        const other = this.ph >= 0.5 ? this.ph - 0.5 : this.ph + 0.5;
-        const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * this.ph);
-        x = this.tap(2 + this.ph * win) * w + this.tap(2 + other * win) * (1 - w);
-        this.pp = (this.pp + 1) & 4095;
-      }
+      if (shifting) x = this.shift(x, ratio, formant);
       const a = Math.abs(x);
       this.env = Math.max(a, this.env * envRel);
 
@@ -223,6 +271,7 @@ class Engine {
     n.inGain = gain();
     n.anIn = analyser(0.5);
     n.hpf = biquad('highpass', 85);
+    n.mic = Array.from({ length: 6 }, () => biquad('peaking', 1000, 1)); // microphone profile, flat until one is chosen
     n.dyn = new AudioWorkletNode(c, 'voice-dynamics', {
       numberOfInputs: 1,
       numberOfOutputs: 1,
@@ -266,10 +315,11 @@ class Engine {
     };
     drift(0.31, 0.0012, n.dl1.delayTime);
     drift(0.43, 0.0016, n.dl2.delayTime);
-    n.panL = c.createStereoPanner();
-    n.panR = c.createStereoPanner();
-    n.panL.pan.value = -0.9;
-    n.panR.pan.value = 0.9;
+    // Sides only (left plus, right minus): folded to mono by a voice chat, the taps cancel exactly.
+    n.side = gain(0.75);
+    n.dl2inv = gain(-1);
+    n.sideInv = gain(-1);
+    n.sides = c.createChannelMerger(2);
     n.widthGain = gain(0);
 
     // Room
@@ -296,13 +346,18 @@ class Engine {
     n.msDest = c.createMediaStreamDestination();
 
     n.inGain.connect(n.anIn);
-    n.inGain.connect(n.hpf).connect(n.dyn).connect(n.mud).connect(n.low).connect(n.pres)
+    let head = n.inGain.connect(n.hpf);
+    for (const band of n.mic) head = head.connect(band);
+    head.connect(n.dyn).connect(n.mud).connect(n.low).connect(n.pres)
       .connect(n.air).connect(n.comp).connect(n.makeup).connect(n.tone);
     n.makeup.connect(n.exIn).connect(n.exShape).connect(n.exOut).connect(n.exGain).connect(n.tone);
 
     n.tone.connect(n.master);
-    n.tone.connect(n.dl1).connect(n.panL).connect(n.widthGain);
-    n.tone.connect(n.dl2).connect(n.panR).connect(n.widthGain);
+    n.tone.connect(n.dl1).connect(n.side);
+    n.tone.connect(n.dl2).connect(n.dl2inv).connect(n.side);
+    n.side.connect(n.sides, 0, 0);
+    n.side.connect(n.sideInv).connect(n.sides, 0, 1);
+    n.sides.connect(n.widthGain);
     n.widthGain.connect(n.master);
     n.tone.connect(n.revIn).connect(n.revLp).connect(n.conv).connect(n.revGain).connect(n.master);
 
@@ -342,6 +397,15 @@ class Engine {
     set(n.inGain.gain, dbToGain(state.inGain));
     set(n.outGain.gain, dbToGain(state.outGain));
 
+    const mic = globalThis.micEq?.() || { hp: 85, bands: [] }; // the chosen microphone profile, resolved in app.js
+    set(n.hpf.frequency, Math.max(40, Math.min(200, mic.hp || 85)));
+    n.mic.forEach((node, i) => {
+      const [f, g, q] = mic.bands[i] || [1000, 0, 1];
+      node.type = q > 0 ? 'peaking' : f < 1000 ? 'lowshelf' : 'highshelf';
+      node.frequency.setValueAtTime(f, t);
+      node.Q.setValueAtTime(q > 0 ? q : 0.707, t);
+      set(node.gain, g);
+    });
     set(n.low.gain, v.warmth * 7.5 - 1);
     set(n.mud.gain, -v.warmth * 3.5);
     set(n.pres.gain, v.clarity * 6);
@@ -365,7 +429,10 @@ class Engine {
     p.get('deess').setValueAtTime(v.deess, t);
     p.get('auto').setValueAtTime(state.auto ? 1 : 0, t);
     p.get('pop').setValueAtTime(state.g.pop / 100, t);
-    p.get('pitch').setValueAtTime(Math.max(-14, Math.min(14, (state.v.pitch || 0) + (voice.fxpitch || 0))), t);
+    const semitones = Math.max(-14, Math.min(14, (state.v.pitch || 0) + (voice.fxpitch || 0)));
+    p.get('pitch').setValueAtTime(semitones, t);
+    // As in the module: "another person" voices keep the timbre (plus their own shift), the rest move it about half as far as the pitch.
+    p.get('timbre').setValueAtTime(Math.max(-5, Math.min(5, voice.fxnatural ? voice.fxformant || 0 : 0.55 * semitones)), t);
     for (const [name, scale] of [['fxring', 1], ['fxringmix', 0.01], ['fxdrive', 0.01], ['fxphone', 1], ['fxtrem', 1], ['fxtremdepth', 0.01], ['fxecho', 1], ['fxechofb', 0.01], ['fxechomix', 0.01], ['fxlp', 1]]) {
       p.get(name).setValueAtTime((voice[name] || 0) * scale, t);
     }

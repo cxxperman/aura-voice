@@ -33,6 +33,32 @@ const PRESETS = {
   custom: { name: 'Свой', hue: 44, v: null }, // whatever the user last dialled in by hand
 };
 
+// Microphone profiles: a corrective EQ for the capsule, applied before everything else.
+// Almost nobody publishes measured EQ for these microphones, so these are starting points built
+// from what reviews and measurements say about each one's response (thin lows, a presence peak,
+// boxiness); the measured profile that «Автонастройка» builds from your own voice is the exact one.
+// A band is [frequency Hz, gain dB, Q]; Q 0 = a shelf.
+const MIC_PROFILES = [
+  { id: 'quadcast', name: 'HyperX QuadCast / QuadCast S', match: /quadcast/i, hp: 80, bands: [[120, 2.5, 0], [300, -1.5, 1], [1000, 1, 1.2], [7000, -1.5, 2]] },
+  { id: 'solocast', name: 'HyperX SoloCast / DuoCast', match: /solocast|duocast/i, hp: 90, bands: [[130, 2, 0], [300, -2, 1], [3200, 1.5, 0.9], [7000, -1, 2]] },
+  { id: 'yeti', name: 'Blue Yeti / Yeti X / Snowball', match: /yeti|snowball|blue micro/i, hp: 100, bands: [[350, -2.5, 1], [3500, 1.5, 1], [7500, -2, 2]] },
+  { id: 'at2020', name: 'Audio-Technica AT2020', match: /at2020|at2040|audio-technica/i, hp: 80, bands: [[150, 2.5, 0], [300, -1.5, 1], [6000, -3, 1.2]] },
+  { id: 'am8', name: 'Fifine AM8 / K688', match: /am8|k688/i, hp: 90, bands: [[500, -2.5, 1.2], [3000, 1.5, 0.9], [8000, 3, 0]] },
+  { id: 'fifine', name: 'Fifine K669 / A6 и похожие', match: /fifine|k669|a6v|ampligame/i, hp: 90, bands: [[300, -2.5, 1], [3200, 1.5, 0.9], [7000, -1, 2]] },
+  { id: 'podmic', name: 'Rode PodMic / PodMic USB', match: /podmic/i, hp: 70, bands: [[130, 2.5, 0], [320, -2, 1], [6000, -1.5, 1], [11000, 3, 0]] },
+  { id: 'ntusb', name: 'Rode NT-USB / NT-USB Mini', match: /nt-?usb|rode/i, hp: 85, bands: [[300, -2, 1], [3200, 1, 0.9], [8000, -1.5, 2]] },
+  { id: 'sm7b', name: 'Shure SM7B / MV7', match: /sm7|mv7|shure/i, hp: 80, bands: [[350, -2, 1], [3500, 2.5, 0.8], [10000, 3, 0]] },
+  { id: 'wave3', name: 'Elgato Wave:1 / Wave:3', match: /wave:?\s?[13]|elgato/i, hp: 80, bands: [[130, 3, 0], [300, -1.5, 1], [3200, 1.5, 0.9]] },
+  { id: 'seiren', name: 'Razer Seiren Mini / X', match: /seiren/i, hp: 90, bands: [[130, 2, 0], [300, -2, 1], [3200, 1.5, 0.9], [7500, -1, 2]] },
+  { id: 'q2u', name: 'Samson Q2U / динамический USB', match: /q2u|samson|atr2100/i, hp: 80, bands: [[350, -2, 1], [3500, 2.5, 0.8], [10000, 3, 0]] },
+  { id: 'maono', name: 'Maono', match: /maono/i, hp: 90, bands: [[300, -2.5, 1], [3200, 1.5, 0.9], [7000, -1, 2]] },
+  { id: 'headset', name: 'Гарнитура (Cloud, Arctis, G Pro, Kraken)', match: /headset|гарнитур|cloud|arctis|g pro|g\d{3}\b|kraken|blackshark|hs\d{2}|void|virtuoso/i, hp: 110, bands: [[250, -3, 1], [600, -2, 1.4], [3000, 3, 0.9], [6500, 4, 0]] },
+  { id: 'builtin', name: 'Встроенный в ноутбук или веб-камеру', match: /realtek|array|webcam|веб-кам|встроен|internal|c9\d\d|brio/i, hp: 120, bands: [[400, -3, 1], [3000, 2, 0.9], [7000, 2, 0]] },
+  { id: 'condenser', name: 'Конденсаторный USB (общий)', hp: 90, bands: [[300, -2.5, 1], [3200, 1.5, 0.9], [7000, -1, 2]] },
+  { id: 'dynamic', name: 'Динамический (общий)', hp: 80, bands: [[350, -2, 1], [3500, 2.5, 0.8], [10000, 3, 0]] },
+];
+const MIC_FLAT = { hp: 85, bands: [] };
+
 const STORE_KEY = 'aura.state.v1';
 const DEFAULTS = {
   on: false,
@@ -45,6 +71,8 @@ const DEFAULTS = {
   custom: null,
   mute: false,
   nsEngine: 0, // 0 = fast (RNNoise), 1 = high quality (DeepFilterNet)
+  mic: 'auto', // microphone profile: 'auto' (by the device's name), 'none', 'measured', or an id from MIC_PROFILES
+  micMeasured: null, // { hp, bands } built by auto-setup from the user's own voice
   fx: 'none', // ready voice, see VOICES
   fxCustom: { pitch: 0, formant: 0, robot: 0, drive: 0, echo: 0, space: 0, trem: 0, phone: 0 },
   fxKeys: {}, // voice id → global hotkey
@@ -94,12 +122,29 @@ let busy = false;
  * When it is installed, Windows itself runs the voice chain inside the microphone,
  * so every program hears the processed voice. This window then only sends settings. */
 let sys = { available: false, installed: false, alive: false };
+let captureDevices = [];
 let sysMessage = '';
 let sysBusy = false;
 let holdingOriginal = false;
 let recording = false;
 let onSince = 0;
 let startFailed = false; // the microphone would not open while the module is installed
+
+// The microphone the profile is for: the one the module sits in, else the one the window records.
+function micName() {
+  return captureDevices.find((d) => d.current)?.name || $('#inputId').selectedOptions[0]?.textContent || '';
+}
+function micProfile() {
+  if (state.mic === 'none') return null;
+  if (state.mic === 'measured') return state.micMeasured ? { name: 'По замеру вашего голоса', ...state.micMeasured } : null;
+  if (state.mic === 'auto') return MIC_PROFILES.find((p) => p.match && p.match.test(micName())) || null;
+  return MIC_PROFILES.find((p) => p.id === state.mic) || null;
+}
+function micEq() {
+  return micProfile() || MIC_FLAT;
+}
+const hzText = (f) => (f >= 1000 ? `${String(f / 1000).replace('.', ',')} кГц` : `${f} Гц`);
+const dbText = (g) => `${g > 0 ? '+' : '−'}${String(Math.abs(g)).replace('.', ',')} дБ`;
 
 function pushSystem() {
   if (!sys.installed || TEST) return;
@@ -123,6 +168,8 @@ function pushSystem() {
       ...Object.entries(fxValues()).map(([k, value]) => `${k}=${value}`),
       `ingain=${state.inGain}`,
       `outgain=${state.outGain}`,
+      `michp=${micEq().hp}`,
+      ...Array.from({ length: 6 }, (_, i) => micEq().bands[i] || [0, 0, 0]).flatMap(([f, g, q], i) => [`m${i + 1}f=${f}`, `m${i + 1}g=${g}`, `m${i + 1}q=${q}`]),
     ].join('\r\n') + '\r\n'
   );
 }
@@ -255,7 +302,7 @@ function latencyText() {
   const deep = state.nsEngine === 1 && moduleLevels?.engine === 1;
   const fx = fxValues();
   const shifted = (state.v.pitch || 0) + fx.fxpitch !== 0 || (fx.fxnatural && fx.fxformant !== 0);
-  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (!shifted ? 0 : fx.fxnatural ? 36 : 25);
+  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (shifted ? 36 : 0);
   return ms ? `задержка около ${ms} мс` : 'без задержки';
 }
 function liveStatus() {
@@ -1290,7 +1337,6 @@ for (const id of ['power', 'mute']) {
 }
 
 /* ───────── Microphone for the module ───────── */
-let captureDevices = [];
 async function loadCaptureDevices() {
   if (!window.auraSystem?.captureDevices || TEST) return;
   captureDevices = fixture ? fixture.captureDevices : (await window.auraSystem.captureDevices()) || [];
@@ -1300,6 +1346,8 @@ async function loadCaptureDevices() {
   if (current) select.value = current.guid;
   select.title = select.selectedOptions[0]?.textContent || '';
   renderSystem();
+  renderMic();
+  applyAll(); // the profile follows the microphone's name
 }
 $('#sysDevice').addEventListener('change', () => renderSystem());
 
@@ -1517,17 +1565,107 @@ engineSelect.addEventListener('change', async () => {
   setTimeout(liveStatus, 1500); // the module needs a moment to load the model
 });
 
+/* ───────── Microphone profile ───────── */
+const micSelect = $('#micProfile');
+function renderMic() {
+  const found = MIC_PROFILES.find((p) => p.match && p.match.test(micName()));
+  micSelect.replaceChildren(
+    new Option(found ? `Авто — ${found.name}` : 'Авто — микрофон не узнан, без коррекции', 'auto'),
+    new Option(state.micMeasured ? 'По замеру вашего голоса' : 'По замеру вашего голоса — нажмите «Автонастройка»', 'measured'),
+    new Option('Без коррекции', 'none'),
+    ...MIC_PROFILES.map((p) => new Option(p.name, p.id))
+  );
+  micSelect.options[1].disabled = !state.micMeasured;
+  micSelect.value = state.mic;
+  if (micSelect.selectedIndex < 0) micSelect.value = state.mic = 'auto';
+  const p = micProfile();
+  $('#micNote').textContent = p
+    ? `Коррекция микрофона: срез ниже ${p.hp} Гц${p.bands.map(([f, g]) => `, ${hzText(f)} ${dbText(g)}`).join('')}. ${state.mic === 'measured' ? 'Построена по вашему голосу.' : 'Это стартовый профиль по известным особенностям микрофона; точный строит «Автонастройка» по вашему голосу.'}`
+    : 'Коррекции микрофона нет. «Автонастройка» построит её по вашему голосу.';
+}
+micSelect.addEventListener('change', () => {
+  state.mic = micSelect.value;
+  renderMic();
+  applyAll();
+  save();
+});
+
+// Long-term average speech spectrum in third-octave bands, dB (after Byrne et al., 1994, rounded):
+// what an average voice looks like through a flat microphone. Only its shape is used.
+const THIRDS = [100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500];
+const SPEECH = [54, 57.5, 59.5, 60, 60.5, 60.5, 61.5, 62, 59.5, 55.5, 54, 53.5, 52.5, 50.5, 49, 48, 47, 46.5, 45.5, 45, 43.5, 41];
+const EQ_REGIONS = [
+  { f: 120, q: 0, lo: 100, hi: 160, max: 4 },
+  { f: 250, q: 1, lo: 200, hi: 315, max: 5 },
+  { f: 500, q: 1.1, lo: 400, hi: 630, max: 5 },
+  { f: 1200, q: 0.9, lo: 800, hi: 1600, max: 5 },
+  { f: 3200, q: 0.9, lo: 2000, hi: 5000, max: 5 },
+  { f: 9000, q: 0, lo: 6300, hi: 12500, max: 5 },
+];
+// Averages the raw microphone's power spectrum while it is being listened to.
+function spectrumMeter() {
+  const an = engine.ctx.createAnalyser();
+  an.fftSize = 4096;
+  an.smoothingTimeConstant = 0;
+  engine.n.inGain.connect(an);
+  const frame = new Float32Array(an.frequencyBinCount);
+  const sum = new Float64Array(frame.length);
+  let frames = 0;
+  return {
+    grab() {
+      an.getFloatFrequencyData(frame);
+      for (let i = 0; i < frame.length; i++) sum[i] += Math.pow(10, frame[i] / 10);
+      frames++;
+    },
+    done() {
+      engine.n.inGain.disconnect(an);
+      const hz = engine.ctx.sampleRate / an.fftSize;
+      // Power per third-octave band.
+      return { frames, bands: THIRDS.map((f) => {
+        let p = 0;
+        for (let i = Math.ceil((f / 1.122) / hz); i < (f * 1.122) / hz && i < sum.length; i++) p += sum[i];
+        return frames ? p / frames : 0;
+      }) };
+    },
+  };
+}
+// Where the voice, through this microphone, departs from an average voice through a flat one —
+// and a gentle correction for it: 60 % of the way, a few dB at most, nothing for trifles.
+function measuredEq(speech, noise) {
+  if (speech.frames < 20) return null;
+  const diff = THIRDS.map((_, k) => {
+    const voice = speech.bands[k] - noise.bands[k];
+    return voice > noise.bands[k] ? 10 * Math.log10(voice) - SPEECH[k] : NaN; // a band buried in noise says nothing
+  });
+  const mean = (lo, hi) => {
+    const xs = diff.filter((d, k) => THIRDS[k] >= lo && THIRDS[k] <= hi && Number.isFinite(d));
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
+  };
+  const level = mean(200, 4000);
+  if (!Number.isFinite(level)) return null;
+  const bands = [];
+  for (const r of EQ_REGIONS) {
+    const off = mean(r.lo, r.hi) - level;
+    if (!Number.isFinite(off)) continue;
+    const gain = Math.round(clamp(-0.6 * off, -r.max, r.max) * 2) / 2;
+    if (Math.abs(gain) >= 1) bands.push([r.f, gain, r.q]);
+  }
+  return { hp: 80, bands };
+}
+
 /* ───────── Auto-setup ─────────
- * Listens to the room, then to the voice, and sets input gain, the gate and noise suppression from what it heard. */
+ * Listens to the room, then to the voice, and sets input gain, the gate and noise suppression from what it
+ * heard — and builds the microphone's corrective EQ from the spectrum of the voice. */
 const tuneBtn = $('#tune');
 let tuning = false;
-async function listen(seconds, label) {
+async function listen(seconds, label, tick) {
   const levels = [];
   const end = performance.now() + seconds * 1000;
   while (performance.now() < end) {
     setStatus(`${label} · ${Math.ceil((end - performance.now()) / 1000)}`);
     const m = engine.meters();
     if (m && m.in > -100) levels.push(m.in - state.inGain); // the raw microphone, before our own gain
+    if (m && tick) tick(m.in - state.inGain);
     await new Promise((r) => setTimeout(r, 50));
   }
   return levels.sort((a, b) => a - b);
@@ -1542,8 +1680,11 @@ tuneBtn.addEventListener('click', async () => {
   pushSystem();
   await new Promise((r) => setTimeout(r, 400));
 
-  const noise = percentile(await listen(3, 'Помолчите'), 0.5);
-  const speech = percentile(await listen(5, 'Говорите обычным голосом'), 0.8);
+  const quiet = spectrumMeter();
+  const noise = percentile(await listen(3, 'Помолчите', () => quiet.grab()), 0.5);
+  const talk = spectrumMeter();
+  const speech = percentile(await listen(6, 'Говорите обычным голосом', (db) => db > noise + 12 && talk.grab()), 0.8); // only while the voice is there
+  const eq = measuredEq(talk.done(), quiet.done());
   holdingOriginal = false;
   tuning = false;
   tuneBtn.classList.remove('live');
@@ -1565,10 +1706,16 @@ tuneBtn.addEventListener('click', async () => {
   const gainInput = $('#inGain');
   gainInput.value = gain;
   gainInput.dispatchEvent(new Event('input')); // updates the label, applies and saves
+  if (eq) {
+    state.micMeasured = eq;
+    state.mic = 'measured';
+    renderMic();
+    applyAll();
+  }
   state.tuned = true;
   save();
   renderGuide();
-  flash(`Настроено: фон ${Math.round(noise)} дБ, голос ${Math.round(speech)} дБ`, false, 6000);
+  flash(`Настроено: фон ${Math.round(noise)} дБ, голос ${Math.round(speech)} дБ${eq ? ', эквалайзер микрофона подстроен под ваш голос' : ''}`, false, 7000);
 });
 
 /* ───────── Orb + meters ───────── */
@@ -1791,6 +1938,8 @@ async function boot() {
   }
   await refreshDevices();
   await pollSystem();
+  renderMic();
+  await loadCaptureDevices(); // the microphone's name picks its profile
   setInterval(pollSystem, 2000);
   window.auraSystem?.onCommand((name, arg) => {
     if (name === 'visible') setWindowVisible(!!arg);

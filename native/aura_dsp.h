@@ -49,6 +49,15 @@ struct Params {
   float fxSpace = 0;      // extra room, added to `space`
   float fxNatural = 0;    // 1 = shift the pitch but keep the timbre (NaturalShifter), for "another person" voices
   float fxFormant = 0;    // semitones the timbre itself is moved by, natural mode only
+
+  // Microphone profile: a corrective EQ for the capsule itself, ahead of everything else, so the
+  // character presets start from a flat, clean microphone. Up to kMicBands parametric bands;
+  // gain 0 = unused, Q 0 = a shelf (low below 1 kHz, high above).
+  static constexpr int kMicBands = 6;
+  float micHp = 85;       // high-pass corner, Hz
+  float micF[kMicBands] = {0, 0, 0, 0, 0, 0};
+  float micG[kMicBands] = {0, 0, 0, 0, 0, 0};
+  float micQ[kMicBands] = {0, 0, 0, 0, 0, 0};
 };
 
 inline float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
@@ -317,32 +326,44 @@ class NaturalShifter {
   }
   inline float back(int samples) const { return in_[size_t((n_ - samples) & (size_ - 1))]; } // 0 = newest
 
-  // Pitch period by autocorrelation, on every other sample. Of several equally good candidates
-  // (a period, two periods, three…) the shortest is the true one.
+  // Normalised autocorrelation at one lag, on every `step`-th sample.
+  inline float correlate(int lag, int window, int step) const {
+    float c = 0, e0 = 1e-9f, e1 = 1e-9f;
+    for (int i = 0; i < window; i += step) {
+      const float a = back(i), b = back(i + lag);
+      c += a * b;
+      e0 += a * a;
+      e1 += b * b;
+    }
+    return c / std::sqrt(e0 * e1);
+  }
+  // Pitch period by autocorrelation, in two passes so the audio thread never stalls on it: a
+  // coarse sweep of every fourth lag on every fourth sample finds the neighbourhood, a fine one
+  // around it finds the period. Of several equally good candidates (a period, two periods,
+  // three…) the shortest is the true one.
   void measure() {
     const int window = maxPeriod_ * 2;
-    float e0 = 1e-9f;
-    for (int i = 0; i < window; i += 2) e0 += back(i) * back(i);
-    if (e0 < 1e-7f * float(window)) return; // silence: keep the last period
+    float e0 = 0;
+    for (int i = 0; i < window; i += 4) e0 += back(i) * back(i);
+    if (e0 < 5e-8f * float(window)) return; // silence: keep the last period
     float best = 0;
     int count = 0;
-    for (int lag = minPeriod_; lag <= maxPeriod_; lag += 2, count++) {
-      float c = 0, e1 = 1e-9f;
-      for (int i = 0; i < window; i += 2) {
-        const float b = back(i + lag);
-        c += back(i) * b;
-        e1 += b * b;
-      }
-      score_[size_t(count)] = c / std::sqrt(e0 * e1);
+    for (int lag = minPeriod_; lag <= maxPeriod_; lag += 4, count++) {
+      score_[size_t(count)] = correlate(lag, window, 4);
       best = std::max(best, score_[size_t(count)]);
     }
     if (best < 0.4f) return; // unvoiced (s, sh, breath): any period will do, keep the last
     for (int j = 1; j + 1 < count; j++) {
       if (score_[size_t(j)] >= 0.88f * best && score_[size_t(j)] >= score_[size_t(j - 1)] && score_[size_t(j)] >= score_[size_t(j + 1)]) {
-        // Refine between the two-sample steps with a parabola through the peak.
-        const float a = score_[size_t(j - 1)], b = score_[size_t(j)], c = score_[size_t(j + 1)];
+        const int around = minPeriod_ + 4 * j;
+        float fine[9];
+        int top = 1;
+        for (int d = 0; d < 9; d++) fine[d] = correlate(around + d - 4, window, 2);
+        for (int d = 2; d < 8; d++) if (fine[d] > fine[top]) top = d;
+        // Between whole samples, a parabola through the peak.
+        const float a = fine[top - 1], b = fine[top], c = fine[top + 1];
         const float shift = (a - c) / (2.0f * (a - 2.0f * b + c) - 1e-9f);
-        const float lag = float(minPeriod_ + 2 * j) + 2.0f * std::clamp(shift, -0.5f, 0.5f);
+        const float lag = float(around + top - 4) + std::clamp(shift, -0.5f, 0.5f);
         period_ += (lag - period_) * 0.6f;
         return;
       }
@@ -510,6 +531,16 @@ class Chain {
     if (hasParams_ && std::memcmp(&p, &params_, sizeof(Params)) == 0) return;
     params_ = p;
     hasParams_ = true;
+    hpf_.highpass(sr_, std::clamp(p.micHp, 40.0f, 200.0f), 0.707f);
+    for (int i = 0; i < Params::kMicBands; i++) {
+      const bool used = std::fabs(p.micG[i]) > 0.05f && p.micF[i] >= 20.0f;
+      if (used && !micOn_[i]) mic_[i].reset();
+      micOn_[i] = used;
+      if (!used) continue;
+      const float f = std::clamp(p.micF[i], 20.0f, 20000.0f), g = std::clamp(p.micG[i], -18.0f, 18.0f);
+      if (p.micQ[i] < 0.05f) { if (f < 1000.0f) mic_[i].lowshelf(sr_, f, g); else mic_[i].highshelf(sr_, f, g); }
+      else mic_[i].peaking(sr_, f, std::clamp(p.micQ[i], 0.2f, 12.0f), g);
+    }
     low_.lowshelf(sr_, 150, p.warmth * 7.5f - 1.0f);
     mud_.peaking(sr_, 300, 1.1f, -p.warmth * 3.5f);
     pres_.peaking(sr_, 3600, 0.9f, p.clarity * 6.0f);
@@ -525,8 +556,13 @@ class Chain {
     inT_ = dbToGain(p.inGainDb);
     const float semitones = std::clamp(p.pitch + p.fxPitch, -14.0f, 14.0f);
     pitchRatio_ = std::fabs(semitones) < 0.01f ? 1.0f : std::pow(2.0f, semitones / 12.0f);
-    formantRatio_ = std::pow(2.0f, std::clamp(p.fxFormant, -5.0f, 5.0f) / 12.0f);
-    useNatural_ = p.fxNatural > 0.5f && (pitchRatio_ != 1.0f || std::fabs(p.fxFormant) > 0.01f);
+    // Every pitch change goes through the pitch-synchronous shifter: the plain one re-reads its
+    // delay line, which doubles consonants on large shifts and is heard as a stutter. "Another
+    // person" voices keep the timbre where it is (plus fxFormant); cartoon voices and the tone
+    // slider move it about half as far as the pitch, which is what makes a giant sound big.
+    const float timbre = p.fxNatural > 0.5f ? p.fxFormant : 0.55f * semitones;
+    formantRatio_ = std::pow(2.0f, std::clamp(timbre, -5.0f, 5.0f) / 12.0f);
+    useNatural_ = pitchRatio_ != 1.0f || std::fabs(timbre) > 0.01f;
     fx_.set(p);
     outT_ = dbToGain(p.outGainDb);
   }
@@ -552,8 +588,8 @@ class Chain {
 
       float x = in[n] * inG_;
       if (useNatural_) x = natural_.process(x, pitchRatio_, formantRatio_);
-      else if (pitchRatio_ != 1.0f) x = pitch_.process(x, pitchRatio_);
       x = hpf_.process(x);
+      for (int i = 0; i < Params::kMicBands; i++) if (micOn_[i]) x = mic_[i].process(x);
       x = dyn_.process(x, gateThr_, deess, autoLevel, params_.pop);
       x = air_.process(pres_.process(low_.process(mud_.process(x))));
 
@@ -579,8 +615,11 @@ class Chain {
       float rl, rr;
       room_.process(revLp_.process(revHp_.process(t)), rl, rr);
 
-      float l = t + widthG_ * (tap1 * 0.997f + tap2 * 0.078f) + rl * revG_;
-      float r = t + widthG_ * (tap1 * 0.078f + tap2 * 0.997f) + rr * revG_;
+      // The doubled taps go to the sides only (left plus, right minus). Voice chats fold the
+      // microphone to mono, and there the taps cancel exactly: no comb filter, no slap-back.
+      const float side = widthG_ * 0.75f * (tap1 - tap2);
+      float l = t + side + rl * revG_;
+      float r = t - side + rr * revG_;
 
       // Stereo-linked limiter: instant attack, 60 ms release.
       const float peak = std::max(std::fabs(l), std::fabs(r));
@@ -605,6 +644,8 @@ class Chain {
   Params params_;
   bool hasParams_ = false;
   Biquad hpf_, mud_, low_, pres_, air_, exIn_, exOut_, revHp_, revLp_;
+  Biquad mic_[Params::kMicBands];
+  bool micOn_[Params::kMicBands] = {false, false, false, false, false, false};
   Dynamics dyn_;
   Room room_;
   PitchShifter pitch_;

@@ -421,6 +421,53 @@ static void runEffects() {
   CHECK(s.params.fxPitch == -12 && s.params.fxRingHz == 55 && std::fabs(s.params.fxRingMix - 0.85f) < 1e-5f && s.params.fxEchoMs == 600 &&
             std::fabs(s.params.fxEchoFb - 0.85f) < 1e-5f && s.params.fxPhone == 1 && std::fabs(s.params.fxDrive - 0.3f) < 1e-5f,
         "effect settings were not parsed or clamped");
+
+  // Width must vanish in mono: voice chats fold the microphone down, and a doubler that survives
+  // the fold is a comb filter on the voice.
+  auto mono = [&](float width, std::vector<float>& m) {
+    aura::Params p = base;
+    p.width = width;
+    p.space = 0;
+    std::vector<float> l(in.size()), r(in.size());
+    aura::Chain chain;
+    chain.prepare(48000);
+    chain.setParams(p);
+    for (size_t at = 0; at < in.size(); at += 480) chain.process(in.data() + at, l.data() + at, r.data() + at, int(std::min<size_t>(480, in.size() - at)));
+    m.resize(in.size());
+    float side = 0;
+    for (size_t i = 0; i < in.size(); i++) { m[i] = 0.5f * (l[i] + r[i]); side = std::max(side, std::fabs(l[i] - r[i])); }
+    return side;
+  };
+  std::vector<float> narrow, wide;
+  mono(0.0f, narrow);
+  const float side = mono(1.0f, wide);
+  double err = 0, ref = 1e-12;
+  for (size_t i = a; i < b; i++) { err += double(wide[i] - narrow[i]) * (wide[i] - narrow[i]); ref += double(narrow[i]) * narrow[i]; }
+  std::printf("width in mono: residue %.1f dB, stereo difference peak %.3f\n", 10.0 * std::log10(err / ref + 1e-12), side);
+  CHECK(side > 0.01f, "width: left and right are identical, nothing was widened");
+  CHECK(err / ref < 0.05, "width leaks into mono: residue %.1f dB", 10.0 * std::log10(err / ref));
+
+  // Microphone profile: parsed, clamped, and audible where it says.
+  const aura::Settings mic = aura::parseSettings("michp=500\nm1f=120\nm1g=2.5\nm1q=0\nm2f=3000\nm2g=40\nm2q=1\nm7f=1000\nm9g=5\n");
+  CHECK(mic.params.micHp == 200 && mic.params.micF[0] == 120 && std::fabs(mic.params.micG[0] - 2.5f) < 1e-5f && mic.params.micG[1] == 18 && mic.params.micQ[1] == 1,
+        "microphone profile was not parsed or clamped");
+  auto toneDb = [&](float hz, const aura::Params& p) {
+    std::vector<float> x(48000), l(48000), r(48000);
+    for (size_t i = 0; i < x.size(); i++) x[i] = 0.05f * std::sin(2 * aura::kPi * hz * float(i) / 48000.0f);
+    aura::Chain chain;
+    chain.prepare(48000);
+    chain.setParams(p);
+    for (size_t at = 0; at < x.size(); at += 480) chain.process(x.data() + at, l.data() + at, r.data() + at, 480);
+    return rmsDb(l, 24000, 48000);
+  };
+  aura::Params flat = base;
+  flat.autoLevel = 0; flat.clean = 0; flat.density = 0; flat.width = 0; flat.space = 0;
+  aura::Params cut = flat;
+  cut.micF[0] = 1000; cut.micG[0] = -6; cut.micQ[0] = 1;
+  const float at1k = toneDb(1000, cut) - toneDb(1000, flat), at200 = toneDb(200, cut) - toneDb(200, flat);
+  std::printf("microphone profile, -6 dB at 1 kHz: 1 kHz %+.1f dB, 200 Hz %+.1f dB\n", at1k, at200);
+  CHECK(at1k < -3.5f && at1k > -8.0f, "microphone band changed 1 kHz by %.1f dB instead of about -6", at1k);
+  CHECK(std::fabs(at200) < 1.5f, "microphone band at 1 kHz moved 200 Hz by %.1f dB", at200);
 }
 
 // How late does each stage deliver? Measured, not assumed: a voice-like glide (its pitch keeps

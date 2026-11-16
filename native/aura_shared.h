@@ -81,6 +81,13 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
     else if (key == "fxspace") s.params.fxSpace = clamp(v / 100, 0, 1);
     else if (key == "fxnatural") s.params.fxNatural = v > 0.5 ? 1.0f : 0.0f;
     else if (key == "fxformant") s.params.fxFormant = clamp(v, -5, 5);
+    else if (key == "michp") s.params.micHp = clamp(v, 40, 200);
+    else if (key.size() == 3 && key[0] == 'm' && key[1] >= '1' && key[1] < '1' + Params::kMicBands && (key[2] == 'f' || key[2] == 'g' || key[2] == 'q')) {
+      const int band = key[1] - '1'; // m1f / m1g / m1q … : one band of the microphone profile
+      if (key[2] == 'f') s.params.micF[band] = clamp(v, 0, 20000);
+      else if (key[2] == 'g') s.params.micG[band] = clamp(v, -18, 18);
+      else s.params.micQ[band] = clamp(v, 0, 12);
+    }
     else if (key == "warmth") s.params.warmth = clamp(v / 100, 0, 1);
     else if (key == "clarity") s.params.clarity = clamp(v / 100, 0, 1);
     else if (key == "air") s.params.air = clamp(v / 100, 0, 1);
