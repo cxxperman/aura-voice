@@ -108,7 +108,7 @@ struct Dynamics {
     // Gate: open fast, hold through the gaps between words, close softly to a floor.
     if (env > thr) { open = true; hold = holdN; }
     else if (env < thr * 0.63f) { if (hold > 0) hold -= 1; else open = false; }
-    const float tg = open ? 1.0f : 0.06f;
+    const float tg = open ? 1.0f : 0.03f;
     g += (tg - g) * (tg > g ? gAtt : gRel);
 
     // Auto-level: ride slowly towards -20 dBFS RMS, only while there is speech.

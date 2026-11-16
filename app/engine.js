@@ -29,7 +29,7 @@ class VoiceDynamics extends AudioWorkletProcessor {
     const de = p.deess[0], auto = p.auto[0] > 0.5;
     const envRel = Math.exp(-1 / (0.05 * sr));
     const gAtt = 1 - Math.exp(-1 / (0.002 * sr)), gRel = 1 - Math.exp(-1 / (0.12 * sr));
-    const holdN = 0.18 * sr, floor = 0.06;
+    const holdN = 0.18 * sr, floor = 0.03;
     const speech = Math.max(thr, 0.01);            // only level-ride on actual speech
     const rmsA = 1 - Math.exp(-1 / (0.4 * sr)), agA = 1 - Math.exp(-1 / (1.5 * sr));
     const lpA = 1 - Math.exp(-2 * Math.PI * 5200 / sr);
