@@ -14,7 +14,8 @@ class VoiceDynamics extends AudioWorkletProcessor {
       { name: 'deess', defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
       { name: 'auto',  defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
       { name: 'pop',   defaultValue: 0,    minValue: 0,    maxValue: 1, automationRate: 'k-rate' },
-      { name: 'pitch', defaultValue: 0,    minValue: -12,  maxValue: 12, automationRate: 'k-rate' },
+      { name: 'pitch', defaultValue: 0,    minValue: -14,  maxValue: 14, automationRate: 'k-rate' },
+      ...['fxring', 'fxringmix', 'fxdrive', 'fxphone', 'fxtrem', 'fxtremdepth', 'fxecho', 'fxechofb', 'fxechomix', 'fxlp'].map((name) => ({ name, defaultValue: 0, automationRate: 'k-rate' })),
     ];
   }
   constructor() {
@@ -24,6 +25,8 @@ class VoiceDynamics extends AudioWorkletProcessor {
     this.lp = 0; this.envHi = 0; this.dg = 1;                      // de-esser
     this.lo = 0; this.envLo = 0; this.pg = 1;                      // de-plosive
     this.pb = new Float32Array(4096); this.pp = 0; this.ph = 0;    // pitch shifter
+    this.eb = new Float32Array(32768); this.ep = 0;                 // effects: echo line
+    this.rp = 0; this.tp = 0; this.f1 = 0; this.f2 = 0; this.uw = 0; // effects: oscillators and filters
   }
   tap(delay) {
     let at = this.pp - delay;
@@ -38,6 +41,15 @@ class VoiceDynamics extends AudioWorkletProcessor {
     const thr = Math.pow(10, p.gate[0] / 20), thrClose = thr * 0.63; // 4 dB of hysteresis
     const de = p.deess[0], auto = p.auto[0] > 0.5, pop = p.pop[0];
     const ratio = Math.abs(p.pitch[0]) < 0.01 ? 1 : Math.pow(2, p.pitch[0] / 12), win = 0.045 * sr;
+    // Ready voices, mirrored from the module so a recorded sample can be auditioned with them.
+    const ringMix = p.fxring[0] > 0 ? p.fxringmix[0] : 0, ringStep = 2 * Math.PI * p.fxring[0] / sr;
+    const drive = p.fxdrive[0], phone = p.fxphone[0] > 0.5;
+    const tremDepth = p.fxtrem[0] > 0 ? p.fxtremdepth[0] : 0, tremStep = 2 * Math.PI * p.fxtrem[0] / sr;
+    const echoMix = p.fxecho[0] > 0 ? p.fxechomix[0] : 0, echoFb = Math.min(p.fxechofb[0], 0.85);
+    const echoLen = Math.max(1, Math.min(32000, Math.round(p.fxecho[0] * 0.001 * sr)));
+    const muffle = p.fxlp[0] > 0 ? 1 - Math.exp(-2 * Math.PI * p.fxlp[0] / sr) : 0;
+    const hpA = 1 - Math.exp(-2 * Math.PI * 420 / sr), lpA2 = 1 - Math.exp(-2 * Math.PI * 3200 / sr);
+    const fxOn = ringMix > 0 || drive > 0 || phone || tremDepth > 0 || echoMix > 0 || muffle > 0;
     const loA = 1 - Math.exp(-2 * Math.PI * 100 / sr), loRel = Math.exp(-1 / (0.06 * sr)), popThr = 0.04;
     const envRel = Math.exp(-1 / (0.05 * sr));
     const gAtt = 1 - Math.exp(-1 / (0.002 * sr)), gRel = 1 - Math.exp(-1 / (0.12 * sr));
@@ -95,7 +107,23 @@ class VoiceDynamics extends AudioWorkletProcessor {
       this.envHi = Math.max(Math.abs(hi), this.envHi * hiRel);
       const td = de > 0 && this.envHi > deThr ? Math.pow(deThr / this.envHi, de * 0.75) : 1;
       this.dg += (td - this.dg) * 0.02;
-      out[n] = this.lp + hi * this.dg;
+      let y = this.lp + hi * this.dg;
+      if (fxOn) {
+        if (drive > 0) y = Math.tanh(y * (1 + drive * 24)) / (1 + drive * 6);
+        if (phone) {
+          this.f1 += (y - this.f1) * hpA;            // what is below 420 Hz…
+          this.f2 += (y - this.f1 - this.f2) * lpA2; // …removed, then everything above 3.2 kHz
+          y = this.f2 * 1.6;
+        }
+        if (muffle > 0) y = this.uw += (y - this.uw) * muffle;
+        if (ringMix > 0) y = y * (1 - ringMix) + y * Math.sin((this.rp += ringStep)) * ringMix * 1.4;
+        if (tremDepth > 0) y *= 1 - tremDepth * (0.5 + 0.5 * Math.sin((this.tp += tremStep)));
+        const delayed = this.eb[(this.ep - echoLen) & 32767];
+        this.eb[this.ep] = y + delayed * echoFb;
+        this.ep = (this.ep + 1) & 32767;
+        y += delayed * echoMix;
+      }
+      out[n] = y;
     }
     return true;
   }
@@ -302,8 +330,10 @@ class Engine {
   }
 
   /** Push every user-facing setting into the graph. */
-  apply(state, instant = false) {
+  apply(state, instant = false, fx = null) {
+    if (fx) this.fx = fx; // remembered: callers that only change a device do not have to know about voices
     if (!this.n) return;
+    const voice = this.fx || {};
     const n = this.n;
     const t = this.ctx.currentTime;
     const set = (param, value) => (instant ? param.setValueAtTime(value, t) : param.setTargetAtTime(value, t, 0.03));
@@ -328,14 +358,17 @@ class Engine {
     set(n.makeup.gain, dbToGain(-autoMakeup * 0.5));
 
     set(n.widthGain.gain, v.width * 0.55);
-    set(n.revGain.gain, v.space * 0.45);
+    set(n.revGain.gain, Math.min(v.space + (voice.fxspace || 0) / 100, 1.6) * 0.45);
 
     const p = n.dyn.parameters;
     p.get('gate').setValueAtTime(v.clean > 0.01 ? -65 + v.clean * 40 : -100, t);
     p.get('deess').setValueAtTime(v.deess, t);
     p.get('auto').setValueAtTime(state.auto ? 1 : 0, t);
     p.get('pop').setValueAtTime(state.g.pop / 100, t);
-    p.get('pitch').setValueAtTime(state.v.pitch || 0, t);
+    p.get('pitch').setValueAtTime(Math.max(-14, Math.min(14, (state.v.pitch || 0) + (voice.fxpitch || 0))), t);
+    for (const [name, scale] of [['fxring', 1], ['fxringmix', 0.01], ['fxdrive', 0.01], ['fxphone', 1], ['fxtrem', 1], ['fxtremdepth', 0.01], ['fxecho', 1], ['fxechofb', 0.01], ['fxechomix', 0.01], ['fxlp', 1]]) {
+      p.get(name).setValueAtTime((voice[name] || 0) * scale, t);
+    }
 
     this.monitor = state.monitor;
     this.monitorId = state.monitorId || '';

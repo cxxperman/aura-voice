@@ -28,7 +28,7 @@ if (!devRun && !app.requestSingleInstanceLock()) app.quit();
 let win;
 let tray;
 let quitting = false;
-let ui = { on: false, mute: false, system: false, preset: '', presetName: '', presets: [] }; // what the window last reported
+let ui = { on: false, mute: false, system: false, preset: '', presetName: '', presets: [], voice: 'none', voices: [] }; // what the window last reported
 const HOTKEY_POWER = 'Ctrl+Shift+F9';
 const HOTKEY_MUTE = 'Ctrl+Shift+F10';
 let hotkeys = { power: HOTKEY_POWER, mute: HOTKEY_MUTE }; // what the window last asked for
@@ -293,6 +293,10 @@ ipcMain.handle('hotkeys:set', (_e, config) => {
   hotkeys = { power: accelOk(config?.power) ? config.power : '', mute: accelOk(config?.mute) ? config.mute : '' };
   bind(hotkeys.power, () => command('power'));
   bind(hotkeys.mute, () => command('mute'));
+  // Ready voices with a key of their own; pressing the key again returns to the normal voice.
+  for (const [id, accel] of Array.isArray(config?.voices) ? config.voices.slice(0, 40) : []) {
+    if (typeof id === 'string' && /^[a-z]{2,20}$/.test(id)) bind(accel, () => command('voice', id));
+  }
   const pads = Array.isArray(config?.pads) ? config.pads.slice(0, 200) : [];
   pads.forEach((key, i) => key && bind(key, () => command('pad', i)));
   // Pads without a key of their own: the first nine get Ctrl+Alt+digit.
@@ -376,6 +380,11 @@ function refreshTray() {
         enabled: ui.presets.length > 0,
         submenu: ui.presets.map((p) => ({ label: p.name, type: 'radio', checked: p.id === ui.preset, click: () => command('preset', p.id) })),
       },
+      {
+        label: 'Эффект',
+        enabled: ui.voices.length > 0,
+        submenu: ui.voices.map((v) => ({ label: v.name, type: 'radio', checked: v.id === ui.voice, click: () => command('voice', v.id === ui.voice ? 'none' : v.id) })),
+      },
       { type: 'separator' },
       {
         label: 'Запускать вместе с Windows',
@@ -411,6 +420,8 @@ ipcMain.on('ui:state', (_e, state) => {
     preset: String(state.preset || ''),
     presetName: String(state.presetName || ''),
     presets: Array.isArray(state.presets) ? state.presets.slice(0, 20).map((p) => ({ id: String(p.id), name: String(p.name) })) : [],
+    voice: String(state.voice || 'none'),
+    voices: Array.isArray(state.voices) ? state.voices.slice(0, 40).map((v) => ({ id: String(v.id), name: String(v.name) })) : [],
   };
   refreshTray();
 });

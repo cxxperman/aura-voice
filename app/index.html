@@ -25,6 +25,7 @@
 
       <h1 id="presetTitle">Студия</h1>
       <p class="status" id="status" role="status">Нажмите на сферу, чтобы включить</p>
+      <button type="button" class="fx-chip" id="fxChip" hidden aria-label="Снять эффект голоса"></button>
 
       <div class="meters">
         <div class="meter"><span>Вход</span><div class="bar"><i id="mIn"></i></div><b id="mInDb">—</b></div>
@@ -43,10 +44,10 @@
 
     <section class="controls">
       <nav class="tabs" id="tabs" role="tablist" aria-label="Разделы">
-        <button type="button" role="tab" data-tab="voice">Голос</button>
-        <button type="button" role="tab" data-tab="effects">Эффекты</button>
-        <button type="button" role="tab" data-tab="sounds">Звуки</button>
-        <button type="button" role="tab" data-tab="setup">Настройки</button>
+        <button type="button" role="tab" data-tab="voice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Голос</span></button>
+        <button type="button" role="tab" data-tab="effects"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3l1.9 5.6L18.5 10.5l-5.6 1.9L11 18l-1.9-5.6L3.5 10.5l5.6-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg><span>Эффекты</span></button>
+        <button type="button" role="tab" data-tab="sounds"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/></svg><span>Звуки</span></button>
+        <button type="button" role="tab" data-tab="setup"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.6"/><circle cx="8" cy="17" r="2.6"/></svg><span>Настройки</span></button>
       </nav>
 
       <div class="page" data-page="voice">
@@ -76,6 +77,10 @@
         <div class="card voices">
           <div class="voices-head"><b>Готовые голоса</b><small id="fxNote"></small></div>
           <div class="voices-grid" id="voices" role="radiogroup" aria-label="Готовый голос"></div>
+        </div>
+        <div class="card fx-custom" id="fxCustom" hidden>
+          <b>Свой голос</b>
+          <div class="fx-knobs" id="fxKnobs"></div>
         </div>
       </div>
 

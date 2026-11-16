@@ -45,6 +45,8 @@ const DEFAULTS = {
   mute: false,
   nsEngine: 0, // 0 = fast (RNNoise), 1 = high quality (DeepFilterNet)
   fx: 'none', // ready voice, see VOICES
+  fxCustom: { pitch: 0, formant: 0, robot: 0, drive: 0, echo: 0, space: 0, trem: 0, phone: 0 },
+  fxKeys: {}, // voice id → global hotkey
   pads: [], // soundboard: [{ id: stored file name, name, source?, key? }]
   hotkeys: { power: 'Ctrl+Shift+F9', mute: 'Ctrl+Shift+F10' },
   onboarded: false,
@@ -63,7 +65,7 @@ function loadState() {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY));
     const g = { ...DEFAULTS.g, ...saved?.g };
     if (saved?.ns === true && !saved.g) g.ns = 60; // older builds had an on/off switch
-    return { ...DEFAULTS, ...saved, g, v: { ...DEFAULTS.v, ...saved?.v }, hotkeys: { ...DEFAULTS.hotkeys, ...saved?.hotkeys } };
+    return { ...DEFAULTS, ...saved, g, v: { ...DEFAULTS.v, ...saved?.v }, hotkeys: { ...DEFAULTS.hotkeys, ...saved?.hotkeys }, fxCustom: { ...DEFAULTS.fxCustom, ...saved?.fxCustom }, fxKeys: { ...saved?.fxKeys } };
   } catch {
     return structuredClone(DEFAULTS);
   }
@@ -125,7 +127,7 @@ function pushSystem() {
 }
 
 function applyAll() {
-  engine.apply(state);
+  engine.apply(state, false, fxValues()); // the in-app chain mirrors the effects, so «Проба» lets you hear them
   pushSystem();
 }
 
@@ -250,8 +252,9 @@ function flash(text, kind = false, ms = kind ? 7000 : 4000) {
 // What the optional stages cost: each one has to look a little way ahead.
 function latencyText() {
   const deep = state.nsEngine === 1 && moduleLevels?.engine === 1;
-  const shifted = (state.v.pitch || 0) + fxValues().fxpitch !== 0;
-  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (shifted ? 25 : 0);
+  const fx = fxValues();
+  const shifted = (state.v.pitch || 0) + fx.fxpitch !== 0 || (fx.fxnatural && fx.fxformant !== 0);
+  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (!shifted ? 0 : fx.fxnatural ? 36 : 25);
   return ms ? `задержка около ${ms} мс` : 'без задержки';
 }
 function liveStatus() {
@@ -314,6 +317,8 @@ function reportToTray() {
     preset: state.preset,
     presetName: PRESETS[state.preset]?.name || '',
     presets: Object.entries(PRESETS).map(([id, p]) => ({ id, name: p.name })),
+    voice: state.fx,
+    voices: Object.entries(VOICES).map(([id, v]) => ({ id, name: v.name })),
   });
 }
 function renderPower() {
@@ -338,6 +343,7 @@ for (const [id, p] of Object.entries(PRESETS)) {
   b.type = 'button';
   b.textContent = p.name;
   b.dataset.id = id;
+  b.style.setProperty('--h', p.hue);
   b.setAttribute('role', 'radio');
   b.addEventListener('click', () => selectPreset(id));
   presetsEl.append(b);
@@ -396,6 +402,14 @@ const sliderInputs = {};
 const bank = (p) => (p.global ? state.g : state.v);
 const show = (p, v) => (p.format ? p.format(Number(v)) : String(v));
 for (const p of PARAMS) {
+  // Two groups with a heading each: what the voice is like, and what the room needs.
+  const groupTitle = p === PARAMS[0] ? 'Характер голоса' : p === PARAMS.find((q) => q.global) ? 'Комната и микрофон' : '';
+  if (groupTitle) {
+    const heading = document.createElement('div');
+    heading.className = 'slider-group';
+    heading.textContent = groupTitle;
+    slidersEl.append(heading);
+  }
   const label = document.createElement('label');
   label.className = 'slider';
   label.innerHTML = `<span><b>${p.name}</b><em></em></span><input type="range" min="${p.min ?? 0}" max="${p.max ?? 100}" step="1"><small>${p.hint}</small>`;
@@ -646,6 +660,12 @@ const shortKey = (accel) => {
   return KEY_NAMES[key] || key.replace(/^num/, 'Num');
 };
 
+// A stable colour per sound, so the board reads at a glance and a pad keeps its colour when it moves.
+const hueOf = (text) => {
+  let h = 7;
+  for (const ch of text) h = (h * 31 + ch.codePointAt(0)) % 360;
+  return h;
+};
 let dragFrom = -1;
 let padsDrawn = false; // no entrance on the very first paint
 function renderPads() {
@@ -665,6 +685,7 @@ function renderPads() {
       b.type = 'button';
       b.className = 'pad';
       b._pad = pad;
+      b.style.setProperty('--h', hueOf(pad.name));
       const accel = padKey(pad, index);
       if (accel) {
         const key = document.createElement('kbd');
@@ -935,59 +956,164 @@ $('#padStop').addEventListener('click', () => {
 
 /* ───────── Ready voices ─────────
  * One tap changes who you sound like. These sit on top of the character and the sliders, and
- * live in the module, so every program hears them. Values are the module's own units. */
-const FX_ZERO = { fxpitch: 0, fxring: 0, fxringmix: 0, fxecho: 0, fxechofb: 0, fxechomix: 0, fxphone: 0, fxdrive: 0, fxtrem: 0, fxtremdepth: 0, fxlp: 0, fxspace: 0 };
+ * live in the module, so every program hears them. Values are the module's own units.
+ * `fxnatural` = move the pitch but keep the timbre: a different person, not a cartoon. */
+const FX_ZERO = { fxpitch: 0, fxnatural: 0, fxformant: 0, fxring: 0, fxringmix: 0, fxecho: 0, fxechofb: 0, fxechomix: 0, fxphone: 0, fxdrive: 0, fxtrem: 0, fxtremdepth: 0, fxlp: 0, fxspace: 0 };
 const VOICES = {
-  none: { name: 'Обычный голос', hint: 'Без эффекта', p: {} },
-  robot: { name: 'Робот', hint: 'Металлический, ровный', p: { fxring: 55, fxringmix: 85 } },
-  alien: { name: 'Пришелец', hint: 'Звенящий, не отсюда', p: { fxring: 190, fxringmix: 60, fxpitch: 3 } },
-  helium: { name: 'Гелий', hint: 'Как после шарика', p: { fxpitch: 7 } },
-  chipmunk: { name: 'Бурундук', hint: 'Совсем тоненький', p: { fxpitch: 11 } },
-  higher: { name: 'Выше', hint: 'Чуть тоньше своего', p: { fxpitch: 4 } },
-  lower: { name: 'Ниже', hint: 'Чуть глубже своего', p: { fxpitch: -3 } },
-  giant: { name: 'Великан', hint: 'Низкий и большой', p: { fxpitch: -6 } },
-  demon: { name: 'Демон', hint: 'Низко, с хрипом и залом', p: { fxpitch: -8, fxdrive: 30, fxspace: 50 } },
-  phone: { name: 'Телефон', hint: 'Узкая полоса, как в трубке', p: { fxphone: 1 } },
-  radio: { name: 'Рация', hint: 'Трубка с перегрузом', p: { fxphone: 1, fxdrive: 55 } },
-  megaphone: { name: 'Мегафон', hint: 'Громкоговоритель на площади', p: { fxphone: 1, fxdrive: 80, fxecho: 90, fxechofb: 20, fxechomix: 25 } },
-  cave: { name: 'Пещера', hint: 'Долгое эхо', p: { fxecho: 260, fxechofb: 50, fxechomix: 45, fxspace: 80 } },
-  hall: { name: 'Собор', hint: 'Большой гулкий зал', p: { fxspace: 100 } },
-  underwater: { name: 'Под водой', hint: 'Глухо и с бульканьем', p: { fxlp: 600, fxtrem: 5, fxtremdepth: 50 } },
-  shaky: { name: 'Дрожащий', hint: 'Голос трясётся', p: { fxtrem: 8, fxtremdepth: 70 } },
+  none: { name: 'Обычный голос', hint: 'Без эффекта', icon: '🎙️', hue: 212, p: {} },
+  girl: { name: 'Девушка', hint: 'Выше, тембр почти свой', icon: '👩', hue: 330, p: { fxpitch: 5, fxnatural: 1, fxformant: 1.5 } },
+  guy: { name: 'Парень', hint: 'Ниже, тембр почти свой', icon: '🧔', hue: 218, p: { fxpitch: -4, fxnatural: 1, fxformant: -1.5 } },
+  kid: { name: 'Ребёнок', hint: 'Высокий и маленький', icon: '🧒', hue: 46, p: { fxpitch: 8, fxnatural: 1, fxformant: 3 } },
+  higher: { name: 'Выше', hint: 'Тот же человек, тоньше', icon: '⬆️', hue: 188, p: { fxpitch: 3, fxnatural: 1 } },
+  lower: { name: 'Ниже', hint: 'Тот же человек, глубже', icon: '⬇️', hue: 250, p: { fxpitch: -3, fxnatural: 1 } },
+  helium: { name: 'Гелий', hint: 'Как после шарика', icon: '🎈', hue: 350, p: { fxpitch: 7 } },
+  chipmunk: { name: 'Бурундук', hint: 'Совсем тоненький', icon: '🐿️', hue: 28, p: { fxpitch: 11 } },
+  giant: { name: 'Великан', hint: 'Низкий и большой', icon: '🗿', hue: 160, p: { fxpitch: -6 } },
+  demon: { name: 'Демон', hint: 'Низко, с хрипом и залом', icon: '😈', hue: 0, p: { fxpitch: -8, fxdrive: 30, fxspace: 50 } },
+  robot: { name: 'Робот', hint: 'Металлический, ровный', icon: '🤖', hue: 200, p: { fxring: 55, fxringmix: 85 } },
+  alien: { name: 'Пришелец', hint: 'Звенящий, не отсюда', icon: '👽', hue: 130, p: { fxring: 190, fxringmix: 60, fxpitch: 3 } },
+  phone: { name: 'Телефон', hint: 'Узкая полоса, как в трубке', icon: '📞', hue: 150, p: { fxphone: 1 } },
+  radio: { name: 'Рация', hint: 'Трубка с перегрузом', icon: '📻', hue: 40, p: { fxphone: 1, fxdrive: 55 } },
+  megaphone: { name: 'Мегафон', hint: 'Громкоговоритель на площади', icon: '📣', hue: 18, p: { fxphone: 1, fxdrive: 80, fxecho: 90, fxechofb: 20, fxechomix: 25 } },
+  cave: { name: 'Пещера', hint: 'Долгое эхо', icon: '🦇', hue: 265, p: { fxecho: 260, fxechofb: 50, fxechomix: 45, fxspace: 80 } },
+  hall: { name: 'Собор', hint: 'Большой гулкий зал', icon: '⛪', hue: 282, p: { fxspace: 100 } },
+  underwater: { name: 'Под водой', hint: 'Глухо и с бульканьем', icon: '🌊', hue: 196, p: { fxlp: 600, fxtrem: 5, fxtremdepth: 50 } },
+  shaky: { name: 'Дрожащий', hint: 'Голос трясётся', icon: '🥶', hue: 205, p: { fxtrem: 8, fxtremdepth: 70 } },
+  custom: { name: 'Свой', hint: 'Соберите из ручек ниже', icon: '🎛️', hue: 44, p: null },
 };
-function fxValues() {
-  return { ...FX_ZERO, ...(VOICES[state.fx] || VOICES.none).p };
+// The knobs of the user's own voice, in plain words; customFx() turns them into module values.
+const CUSTOM_KNOBS = [
+  { id: 'pitch', name: 'Тон', hint: 'Ниже или выше, в полутонах', min: -12, max: 12, signed: true },
+  { id: 'formant', name: 'Тембр', hint: '«Размер» голоса: меньше или больше', min: -5, max: 5, signed: true },
+  { id: 'robot', name: 'Робот', hint: 'Металлический призвук' },
+  { id: 'drive', name: 'Искажение', hint: 'Хрип и перегруз' },
+  { id: 'echo', name: 'Эхо', hint: 'Повторы после слов' },
+  { id: 'space', name: 'Зал', hint: 'Гулкое помещение' },
+  { id: 'trem', name: 'Дрожь', hint: 'Голос трясётся' },
+  { id: 'phone', name: 'Трубка', hint: 'Узкая полоса, как в телефоне', max: 1, toggle: true },
+];
+function customFx() {
+  const c = state.fxCustom;
+  return {
+    fxpitch: c.pitch,
+    fxformant: c.formant,
+    // Small shifts sound like a person when the timbre is kept; big ones are meant to be cartoonish.
+    fxnatural: c.formant !== 0 || (c.pitch !== 0 && Math.abs(c.pitch) <= 6) ? 1 : 0,
+    fxring: c.robot ? 55 : 0,
+    fxringmix: c.robot,
+    fxdrive: c.drive,
+    fxecho: c.echo ? 220 : 0,
+    fxechofb: c.echo ? 45 : 0,
+    fxechomix: Math.round(c.echo * 0.6),
+    fxspace: c.space,
+    fxtrem: c.trem ? 7 : 0,
+    fxtremdepth: c.trem,
+    fxphone: c.phone ? 1 : 0,
+  };
 }
+function fxValues() {
+  return { ...FX_ZERO, ...(state.fx === 'custom' ? customFx() : (VOICES[state.fx] || VOICES.none).p) };
+}
+function selectVoice(id) {
+  state.fx = VOICES[id] ? id : 'none';
+  save();
+  applyAll();
+  renderVoices();
+  liveStatus();
+  reportToTray();
+}
+
 const voicesEl = $('#voices');
+const voiceTiles = {};
 for (const [id, voice] of Object.entries(VOICES)) {
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'voice';
-  b.dataset.id = id;
   b.setAttribute('role', 'radio');
+  b.style.setProperty('--h', voice.hue);
+  const icon = document.createElement('span');
+  icon.className = 'voice-icon';
+  icon.textContent = voice.icon;
+  icon.setAttribute('aria-hidden', 'true');
+  const text = document.createElement('span');
+  text.className = 'voice-text';
   const name = document.createElement('b');
   name.textContent = voice.name;
   const hint = document.createElement('small');
-  hint.textContent = voice.hint;
-  b.append(name, hint);
-  b.addEventListener('click', () => {
-    state.fx = id;
-    save();
-    pushSystem();
-    renderVoices();
-    liveStatus();
+  text.append(name, hint);
+  const key = document.createElement('kbd');
+  b.append(icon, text, key);
+  b.addEventListener('click', () => selectVoice(id));
+  // Right-click: give this voice a key of its own.
+  b.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    hint.textContent = 'Нажмите сочетание… Esc — отмена';
+    b.focus();
+    captureHotkey((accel) => {
+      if (accel !== null) {
+        for (const other of Object.keys(state.fxKeys)) if (state.fxKeys[other] === accel) delete state.fxKeys[other]; // one key, one voice
+        if (accel) state.fxKeys[id] = accel;
+        else delete state.fxKeys[id];
+        save();
+        syncHotkeys();
+      }
+      renderVoices();
+    });
   });
+  b.addEventListener('blur', stopCapture);
+  voiceTiles[id] = { b, hint, key };
   voicesEl.append(b);
 }
+
+// The editor for "Свой": a few knobs in plain words.
+const knobsEl = $('#fxKnobs');
+for (const knob of CUSTOM_KNOBS) {
+  const label = document.createElement('label');
+  label.className = 'slider';
+  label.innerHTML = `<span><b>${knob.name}</b><em></em></span><input type="range" min="${knob.min ?? 0}" max="${knob.max ?? 100}" step="1"><small>${knob.hint}</small>`;
+  const input = label.querySelector('input');
+  const value = label.querySelector('em');
+  const showKnob = () => {
+    const v = Number(input.value);
+    value.textContent = knob.toggle ? (v ? 'да' : 'нет') : knob.signed && v > 0 ? `+${v}` : String(v).replace('-', '−');
+    fill(input);
+  };
+  input.value = state.fxCustom[knob.id] ?? 0;
+  showKnob();
+  input.addEventListener('input', () => {
+    state.fxCustom[knob.id] = Number(input.value);
+    showKnob();
+    applyAll();
+    save();
+    liveStatus();
+  });
+  knobsEl.append(label);
+}
+
 function renderVoices() {
   if (!VOICES[state.fx]) state.fx = 'none';
-  for (const b of voicesEl.children) b.setAttribute('aria-checked', String(b.dataset.id === state.fx));
+  for (const [id, tile] of Object.entries(voiceTiles)) {
+    const accel = state.fxKeys[id] || '';
+    tile.b.setAttribute('aria-checked', String(id === state.fx));
+    tile.hint.textContent = VOICES[id].hint;
+    tile.key.textContent = accel ? shortKey(accel) : '';
+    tile.key.hidden = !accel;
+    tile.key.classList.toggle('failed', hotkeyFailed.has(accel));
+    tile.b.title = `${VOICES[id].name}${accel ? ' · ' + accel + (hotkeyFailed.has(accel) ? ' (занята другой программой)' : '') : ''} — правый клик: назначить клавишу`;
+  }
+  $('#fxCustom').hidden = state.fx !== 'custom';
   const note = $('#fxNote');
   // The effects run inside the microphone module, on the processed voice.
   const problem = !sys.installed ? 'Нужен модуль в микрофоне: встройте его на вкладке «Настройки».' : !engine.running ? 'Включите сферу — эффекты накладываются на обработанный голос.' : '';
-  note.textContent = problem || 'Слышат все программы. Проверить на себе — «Слышать себя» на вкладке «Голос».';
+  note.textContent = problem || 'Слышат все программы. Правый клик по голосу — назначить клавишу.';
   note.classList.toggle('warn', !!problem);
+  // The current voice is always visible under the big title, whatever page is open.
+  const chip = $('#fxChip');
+  chip.hidden = state.fx === 'none';
+  chip.textContent = `${VOICES[state.fx].icon} ${VOICES[state.fx].name}  ✕`;
+  chip.style.setProperty('--h', VOICES[state.fx].hue);
 }
+$('#fxChip').addEventListener('click', () => selectVoice('none'));
 
 /* ───────── Hotkeys ─────────
  * Global shortcuts live in the main process; this side decides what they are. */
@@ -1043,11 +1169,12 @@ addEventListener(
 
 async function syncHotkeys() {
   if (!window.auraSystem?.setHotkeys || TEST) return;
-  const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null) });
+  const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null), voices: Object.entries(state.fxKeys) });
   const next = new Set(fixture ? fixture.failedHotkeys : failed || []);
   const changed = next.size !== hotkeyFailed.size || [...next].some((accel) => !hotkeyFailed.has(accel));
   hotkeyFailed = next;
   renderHotkeys();
+  renderVoices();
   if (changed) renderPads(); // not a second rebuild of the whole grid for nothing
 }
 function renderHotkeys() {
@@ -1584,6 +1711,7 @@ async function boot() {
     if (name === 'visible') setWindowVisible(!!arg);
     if (name === 'power') setPower(!engine.running);
     if (name === 'preset') selectPreset(arg);
+    if (name === 'voice') selectVoice(arg === state.fx ? 'none' : arg); // the same key again switches it off
     if (name === 'pad' && state.pads[arg]) playPad(state.pads[arg]);
     if (name === 'mute' && sys.installed) {
       $('#mute').checked = state.mute = !state.mute;

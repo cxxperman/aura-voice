@@ -517,6 +517,58 @@ select:hover { background-color: rgba(255, 255, 255, 0.13); }
 @keyframes dot-in { from { opacity: 0; transform: scale(0.4); } }
 @keyframes menu-fade { from { opacity: 0; } }
 
+/* ───────── Colour and structure ─────────
+ * Every voice, every sound and every character carries a hue of its own (--h), so the window
+ * reads at a glance; headings split the long slider card in two; tabs get icons. */
+.tabs { grid-template-columns: repeat(4, auto); }
+.tabs button { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; }
+.tabs svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+
+.presets button::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: hsl(var(--h, 212) 90% 64%); vertical-align: 1px; opacity: 0.55; transition: opacity 200ms ease; }
+.presets button[aria-checked='true']::before { opacity: 1; box-shadow: 0 0 10px hsl(var(--h, 212) 90% 64% / 0.9); }
+
+.slider-group { grid-column: 1 / -1; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+.slider-group + .slider, .slider-group + .slider + .slider { margin-top: -6px; }
+.slider ~ .slider-group { margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--glass-edge); }
+
+/* Left column: the meters become a panel, the orb gets a rim that lights up with the voice. */
+.meters { width: calc(100% - 12px); padding: 14px 16px; border-radius: 18px; background: var(--glass); border: 1px solid var(--glass-edge); border-top-color: var(--glass-top); }
+.orb::after { content: ''; position: absolute; inset: 22px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 0 0 hsl(var(--hue) 90% 60% / 0); transition: box-shadow 400ms ease, border-color 400ms ease; pointer-events: none; }
+body.on .orb::after { border-color: hsl(var(--hue) 90% 72% / 0.35); box-shadow: 0 0 46px hsl(var(--hue) 90% 60% / 0.35); }
+.fx-chip {
+  flex: none; margin-top: 10px; height: 28px; padding: 0 12px; border-radius: 14px; cursor: pointer;
+  border: 1px solid hsl(var(--h, 212) 80% 66% / 0.5); background: hsl(var(--h, 212) 70% 50% / 0.22);
+  color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; white-space: pre;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease;
+}
+.fx-chip[hidden] { display: none; }
+.fx-chip:hover { background: hsl(var(--h, 212) 70% 50% / 0.34); }
+.fx-chip:active { transform: scale(0.96); transition-duration: 80ms; }
+.fx-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Ready voices: an icon in a tinted disc, the tile lights up in the voice's own colour. */
+.voices-grid { grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); }
+.voice { position: relative; display: flex; align-items: center; gap: 11px; min-height: 60px; padding: 9px 12px; background: hsl(var(--h) 45% 50% / 0.1); border-color: hsl(var(--h) 55% 66% / 0.16); border-top-color: hsl(var(--h) 60% 80% / 0.28); }
+.voice:hover { background: hsl(var(--h) 55% 52% / 0.18); }
+.voice-icon { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-size: 19px; line-height: 1; background: hsl(var(--h) 70% 55% / 0.22); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14); transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms ease; }
+.voice-text { min-width: 0; }
+.voice[aria-checked='true'] { background: linear-gradient(135deg, hsl(var(--h) 80% 55% / 0.42), hsl(calc(var(--h) + 30) 80% 50% / 0.22)); border-color: hsl(var(--h) 90% 72% / 0.7); box-shadow: 0 8px 26px hsl(var(--h) 80% 45% / 0.28); }
+.voice[aria-checked='true'] .voice-icon { background: hsl(var(--h) 85% 60% / 0.55); transform: scale(1.08); }
+.voice kbd { position: absolute; top: 6px; right: 7px; padding: 0 5px; border-radius: 5px; background: rgba(255, 255, 255, 0.16); font-family: inherit; font-weight: 600; font-size: 10px; line-height: 1.6; color: var(--text-2); }
+.voice kbd[hidden] { display: none; }
+.voice kbd.failed { background: rgba(255, 69, 58, 0.4); color: #fff; }
+.fx-custom { flex: none; padding: 16px 22px 20px; }
+.fx-custom[hidden] { display: none; }
+.fx-custom > b { font-weight: 600; }
+.fx-knobs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; margin-top: 14px; }
+
+/* Sound pads in their own colours. */
+.pad { background: hsl(var(--h, 220) 50% 52% / 0.15); border-color: hsl(var(--h, 220) 55% 66% / 0.2); border-top-color: hsl(var(--h, 220) 60% 80% / 0.3); }
+.pad:hover { background: hsl(var(--h, 220) 58% 54% / 0.24); }
+.pad:active { background: hsl(var(--h, 220) 75% 58% / 0.42); }
+
+@media (max-width: 880px) { .fx-knobs { grid-template-columns: minmax(0, 1fr); } .tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); } .tabs button { padding: 0 6px; } }
+
 /* The cards sit over colour blobs that are already blurred by 110 px; blurring that again changes
  * no pixel by more than 7/255 (measured), yet costs a filtered surface per card on every scroll
  * frame. Keep the saturation lift, drop the blur. The pad menu keeps its blur: it floats over text. */
@@ -555,3 +607,8 @@ select:hover { background-color: rgba(255, 255, 255, 0.13); }
 
 /* Hairline seams between the fish pixels while the sprite is moving by fractions of a pixel. */
 .intro-fish i.body { box-shadow: 0 0 0 0.5px #f08a4b; }
+
+/* Fit and finish after looking at the result. */
+.orb::after { inset: 50px; }                                             /* a rim around the sphere, not an orbit far outside it */
+.presets button { white-space: nowrap; padding: 0 4px; font-size: 13.5px; } /* the colour dot must never wrap away from its name */
+.presets button::before { margin-right: 6px; }

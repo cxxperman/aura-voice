@@ -316,23 +316,22 @@ static float pitchOf(const std::vector<float>& x, size_t from) {
   }
   return 48000.0f / float(bestLag);
 }
+// Where the energy between 400 and 2200 Hz sits on average. A single band maximum would snap to
+// whichever harmonic happens to be nearest; the centre of gravity moves smoothly with the resonance.
 static float resonanceOf(const std::vector<float>& x, size_t from) {
-  float bestHz = 0;
-  double best = 0;
-  for (float hz = 400; hz <= 2200; hz += 25) {
-    double band = 0;
-    for (float f = hz - 100; f <= hz + 100; f += 20) { // energy in a 200 Hz band
-      double re = 0, im = 0;
-      for (size_t i = 0; i < 9600; i++) {
-        const double a = 2.0 * 3.14159265358979 * f * double(i) / 48000.0;
-        re += x[from + i] * std::cos(a);
-        im += x[from + i] * std::sin(a);
-      }
-      band += re * re + im * im;
+  double weighted = 0, total = 0;
+  for (float hz = 400; hz <= 2200; hz += 10) {
+    double re = 0, im = 0;
+    for (size_t i = 0; i < 9600; i++) {
+      const double a = 2.0 * 3.14159265358979 * hz * double(i) / 48000.0;
+      re += x[from + i] * std::cos(a);
+      im += x[from + i] * std::sin(a);
     }
-    if (band > best) { best = band; bestHz = hz; }
+    const double power = re * re + im * im;
+    weighted += power * hz;
+    total += power;
   }
-  return bestHz;
+  return float(weighted / (total + 1e-30));
 }
 static void runNatural() {
   struct Case { float f0, semitones, formant; };
@@ -355,12 +354,13 @@ static void runNatural() {
     const size_t from = 48000;
     const float inPeak = *std::max_element(in.begin(), in.end());
     const float gotPitch = pitchOf(a, from), wantPitch = c.f0 * ratio;
-    const float gotRes = resonanceOf(a, from), wantRes = 900 * formant, plainRes = resonanceOf(b, from);
+    const float inRes = resonanceOf(in, from);
+    const float gotRes = resonanceOf(a, from), wantRes = inRes * formant, plainRes = resonanceOf(b, from);
     std::printf("natural f0=%3.0f %+2.0f st, timbre %+4.1f st: pitch %5.1f Hz (want %5.1f) | resonance %4.0f Hz (want %4.0f; plain shifter moves it to %4.0f) | level x%.2f\n",
                 c.f0, c.semitones, c.formant, gotPitch, wantPitch, gotRes, wantRes, plainRes, peak / inPeak);
     CHECK(finite, "natural shifter produced NaN or infinity");
     CHECK(std::fabs(gotPitch / wantPitch - 1) < 0.06f, "natural shifter: pitch %.1f Hz instead of %.1f", gotPitch, wantPitch);
-    CHECK(std::fabs(gotRes - wantRes) <= 130, "natural shifter: resonance moved to %.0f Hz, should be near %.0f", gotRes, wantRes);
+    CHECK(std::fabs(gotRes / wantRes - 1) < 0.08f, "natural shifter: resonance moved to %.0f Hz, should be near %.0f", gotRes, wantRes);
     CHECK(peak / inPeak > 0.4f && peak / inPeak < 2.5f, "natural shifter changed the level by x%.2f", peak / inPeak);
   }
   aura::NaturalShifter lat;
