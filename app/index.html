@@ -29,6 +29,7 @@
       <h1 id="presetTitle">Студия</h1>
       <p class="status" id="status" role="status">Нажмите на сферу, чтобы включить</p>
       <button type="button" class="fx-chip" id="fxChip" hidden aria-label="Снять эффект голоса"></button>
+      <button type="button" class="update-chip" id="updateBtn" hidden></button>
 
       <nav class="tabs" id="tabs" role="tablist" aria-label="Разделы" aria-orientation="vertical">
         <button type="button" role="tab" data-tab="voice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Голос</span></button>
@@ -161,6 +162,7 @@
           <label class="field"><span>Профиль микрофона</span><select id="micProfile"></select></label>
           <label class="field"><span>Громкость на выходе</span><select id="loudTarget"><option value="0">Не выравнивать</option><option value="-18">−18 LUFS — звонки и Discord</option><option value="-16">−16 LUFS — подкаст</option><option value="-14">−14 LUFS — YouTube и стрим (плотнее, лимитер работает чаще)</option></select></label>
           <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 30 мс</option></select></label>
+          <label class="switch"><span><b>Проверять обновления</b><small>При запуске спрашивает у GitHub, вышла ли новая версия. Устанавливается только по вашему нажатию</small></span><input type="checkbox" id="autoUpdate"><i></i></label>
           <label class="switch"><span><b>Убрать гул сети</b><small>Вырезает 50 Гц и его гармоники — гудение от розетки и плохой земли</small></span><input type="checkbox" id="dehum"><i></i></label>
           <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
           <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>

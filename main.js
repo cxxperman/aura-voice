@@ -1,5 +1,5 @@
-const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog, shell, nativeTheme } = require('electron');
-const { execFile } = require('child_process');
+const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog, shell, nativeTheme, net } = require('electron');
+const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
@@ -596,6 +596,77 @@ ipcMain.handle('system:reset-deep', () => {
   return true;
 });
 
+// After an update the window is new but the module inside the microphone is still the old file:
+// compare the installed one with the one shipped in this version (size first, then contents).
+let outdatedMemo = { key: '', value: false };
+function moduleOutdated() {
+  try {
+    const shipped = path.join(binDir, 'AuraAPO.dll');
+    const a = fs.statSync(shipped), b = fs.statSync(installedDll);
+    const key = `${a.size}:${a.mtimeMs}:${b.size}:${b.mtimeMs}`;
+    if (outdatedMemo.key !== key) {
+      const hash = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+      outdatedMemo = { key, value: a.size !== b.size || hash(shipped) !== hash(installedDll) };
+    }
+    return outdatedMemo.value;
+  } catch {
+    return false;
+  }
+}
+
+/* ───── Updates ─────
+ * Releases of the project's own GitHub repository are the only source. The window asks, the
+ * user decides; nothing is downloaded or installed without a click. */
+const UPDATE_REPO = 'cxxperman/aura-voice';
+const newer = (a, b) => {
+  const x = a.split('.').map(Number), y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+};
+let pendingUpdate = null;
+ipcMain.handle('update:check', async () => {
+  if (!app.isPackaged) return null;
+  try {
+    const res = await net.fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases?per_page=10`, { headers: { 'User-Agent': `AuraVoice/${app.getVersion()}`, Accept: 'application/vnd.github+json' } });
+    if (!res.ok) return null;
+    let best = null;
+    for (const rel of await res.json()) {
+      if (rel.draft) continue;
+      for (const asset of rel.assets || []) {
+        const m = /^Aura-Setup-(\d+\.\d+\.\d+)\.exe$/.exec(asset.name || '');
+        const url = String(asset.browser_download_url || '');
+        if (!m || !url.startsWith(`https://github.com/${UPDATE_REPO}/releases/download/`)) continue;
+        if (newer(m[1], app.getVersion()) && (!best || newer(m[1], best.version))) {
+          best = { version: m[1], url, size: Number(asset.size) || 0, digest: typeof asset.digest === 'string' ? asset.digest : '' };
+        }
+      }
+    }
+    pendingUpdate = best;
+    return best ? { version: best.version, megabytes: Math.round(best.size / 1e6) } : null;
+  } catch {
+    return null;
+  }
+});
+ipcMain.handle('update:install', async () => {
+  const u = pendingUpdate;
+  if (!u) return false;
+  try {
+    const res = await net.fetch(u.url, { headers: { 'User-Agent': `AuraVoice/${app.getVersion()}` } });
+    if (!res.ok) return false;
+    const data = Buffer.from(await res.arrayBuffer());
+    // What arrived must be what the release lists: its size, and its SHA-256 when GitHub gives one.
+    if (u.size && data.length !== u.size) return false;
+    if (u.digest.startsWith('sha256:') && crypto.createHash('sha256').update(data).digest('hex') !== u.digest.slice(7).toLowerCase()) return false;
+    const file = path.join(app.getPath('temp'), `Aura-Setup-${u.version}.exe`);
+    fs.writeFileSync(file, data);
+    spawn(file, ['/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref();
+    setTimeout(() => app.exit(0), 300);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle('system:status', () => {
   const status = {
     available: fs.existsSync(path.join(binDir, 'AuraSetup.exe')) && fs.existsSync(path.join(binDir, 'AuraAPO.dll')),
@@ -604,6 +675,7 @@ ipcMain.handle('system:status', () => {
     alive: false,
   };
   status.detached = status.installed && attached === false;
+  status.outdated = status.installed && moduleOutdated();
   try {
     // The module rewrites status.txt once a second while Windows is running it.
     status.alive = Date.now() - fs.statSync(path.join(dataDir, 'status.txt')).mtimeMs < 3000;

@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('auraSystem', {
   catalogAdd: (item) => ipcRenderer.invoke('uwu:add', item),
   openCatalogSite: () => ipcRenderer.invoke('uwu:open'),
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
   renderAvailable: () => ipcRenderer.invoke('render:available'),
   renderSample: (pcm, settings) => ipcRenderer.invoke('render:sample', pcm, settings),
   renderBegin: (name) => ipcRenderer.invoke('render:begin', name),

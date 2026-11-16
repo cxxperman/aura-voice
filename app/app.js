@@ -100,6 +100,7 @@ const DEFAULTS = {
   eqTab: 'simple', // which bank the equalizer shows: 'simple' (bass and treble), 'freq' or 'tone' (processing)
   loud: 0, // output loudness to hold, LUFS; 0 = leave it
   dehum: false, // notch out 50 Hz mains hum
+  autoUpdate: true, // ask GitHub for a newer release at start
   voiceLevels: null, // third-octave spectrum of the user's own voice (dB), measured by auto-setup
   fx: 'none', // ready voice, see VOICES
   fxCustom: { pitch: 0, formant: 0, robot: 0, drive: 0, echo: 0, space: 0, trem: 0, phone: 0 },
@@ -283,7 +284,11 @@ function renderSystem() {
   // Give Windows a few seconds to load the module before calling it a failure.
   const silent = sys.installed && (startFailed || (engine.running && !engine.sampleMode && !sys.alive && Date.now() - onSince > 6000));
   let title, text, action;
-  if (sys.detached) {
+  if (sys.outdated && !sys.detached) {
+    title = 'Модуль в микрофоне нужно обновить';
+    text = 'Aura обновилась, а в микрофоне ещё работает прежний модуль. Windows спросит права администратора, звук прервётся на пару секунд.';
+    action = 'Обновить модуль';
+  } else if (sys.detached) {
     title = 'Windows отключила модуль';
     text = 'Так бывает после обновления Windows или драйвера микрофона. Встройте модуль заново — настройки сохранятся.';
     action = 'Встроить заново';
@@ -301,15 +306,15 @@ function renderSystem() {
     action = 'Убрать';
   }
   renderVoices();
-  card.classList.toggle('warn', silent || !!sys.detached);
+  card.classList.toggle('warn', silent || !!sys.detached || !!sys.outdated);
   // The card lives on the Settings page: flag the tab when it needs attention.
-  tabButtons.find((b) => b.dataset.tab === 'setup').classList.toggle('attention', silent || !!sys.detached);
+  tabButtons.find((b) => b.dataset.tab === 'setup').classList.toggle('attention', silent || !!sys.detached || !!sys.outdated);
   $('#sysTitle').textContent = title;
   $('#sysText').textContent = sysMessage || text;
   btn.textContent = sysBusy ? 'Подождите…' : action;
   btn.disabled = alt.disabled = sysBusy;
   alt.hidden = true;
-  btn.dataset.action = sys.installed && !sys.detached ? 'uninstall' : 'install';
+  btn.dataset.action = sys.installed && !sys.detached && !sys.outdated ? 'uninstall' : 'install';
   // Picking another microphone in the list turns the button into "move the module there".
   const select = $('#sysDevice');
   const current = captureDevices.find((d) => d.current);
@@ -2162,6 +2167,30 @@ takeBtn.addEventListener('click', async () => {
   rec.start();
 });
 
+/* ───────── Updates ───────── */
+const updateBtn = $('#updateBtn');
+async function checkUpdate() {
+  if (!state.autoUpdate || TEST || !window.auraSystem?.checkUpdate) return;
+  const u = await window.auraSystem.checkUpdate();
+  updateBtn.hidden = !u;
+  if (u) updateBtn.textContent = `Обновить до ${u.version}`;
+}
+updateBtn.addEventListener('click', async () => {
+  updateBtn.disabled = true;
+  updateBtn.textContent = 'Скачиваю обновление…';
+  if (!(await window.auraSystem.installUpdate())) { // on success the app closes and the installer takes over
+    updateBtn.disabled = false;
+    updateBtn.textContent = 'Не скачалось — попробовать ещё раз';
+  }
+});
+$('#autoUpdate').checked = state.autoUpdate !== false;
+$('#autoUpdate').addEventListener('change', (e) => {
+  state.autoUpdate = e.target.checked;
+  save();
+  if (state.autoUpdate) checkUpdate();
+  else updateBtn.hidden = true;
+});
+
 /* ───────── Output loudness and hum ───────── */
 const loudSelect = $('#loudTarget');
 loudSelect.value = String(state.loud || 0);
@@ -2401,6 +2430,7 @@ async function boot() {
   await pollSystem();
   renderMic();
   await loadCaptureDevices(); // the microphone's name picks its profile
+  checkUpdate();
   setInterval(pollSystem, 2000);
   window.auraSystem?.onCommand((name, arg) => {
     if (name === 'visible') setWindowVisible(!!arg);
