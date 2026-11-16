@@ -82,8 +82,9 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
     else if (key == "fxnatural") s.params.fxNatural = v > 0.5 ? 1.0f : 0.0f;
     else if (key == "fxformant") s.params.fxFormant = clamp(v, -5, 5);
     else if (key == "michp") s.params.micHp = clamp(v, 40, 200);
-    else if (key.size() == 3 && key[0] == 'm' && key[1] >= '1' && key[1] < '1' + Params::kMicBands && (key[2] == 'f' || key[2] == 'g' || key[2] == 'q')) {
-      const int band = key[1] - '1'; // m1f / m1g / m1q … : one band of the microphone profile
+    else if (key.size() == 3 && key[0] == 'm' && (key[2] == 'f' || key[2] == 'g' || key[2] == 'q') &&
+             ((key[1] >= '1' && key[1] <= '9') || (key[1] >= 'a' && key[1] < 'a' + Params::kMicBands - 9))) {
+      const int band = key[1] <= '9' ? key[1] - '1' : 9 + key[1] - 'a'; // m1f … m9f, maf … mef: one band of the corrective EQ
       if (key[2] == 'f') s.params.micF[band] = clamp(v, 0, 20000);
       else if (key[2] == 'g') s.params.micG[band] = clamp(v, -18, 18);
       else s.params.micQ[band] = clamp(v, 0, 12);

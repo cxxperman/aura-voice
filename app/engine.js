@@ -272,7 +272,7 @@ class Engine {
     n.inGain = gain();
     n.anIn = analyser(0.5);
     n.hpf = biquad('highpass', 85);
-    n.mic = Array.from({ length: 6 }, () => biquad('peaking', 1000, 1)); // microphone profile, flat until one is chosen
+    n.mic = Array.from({ length: 14 }, () => biquad('peaking', 1000, 1)); // microphone profile + the user's frequency equalizer, flat until used
     n.dyn = new AudioWorkletNode(c, 'voice-dynamics', {
       numberOfInputs: 1,
       numberOfOutputs: 1,
@@ -398,7 +398,7 @@ class Engine {
     set(n.inGain.gain, dbToGain(state.inGain));
     set(n.outGain.gain, dbToGain(state.outGain));
 
-    const mic = globalThis.micEq?.() || { hp: 85, bands: [] }; // the chosen microphone profile, resolved in app.js
+    const mic = globalThis.eqBands?.() || { hp: 85, bands: [] }; // microphone profile + frequency equalizer, resolved in app.js
     set(n.hpf.frequency, Math.max(40, Math.min(200, mic.hp || 85)));
     n.mic.forEach((node, i) => {
       const [f, g, q] = mic.bands[i] || [1000, 0, 1];

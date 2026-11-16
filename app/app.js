@@ -22,6 +22,20 @@ const PARAMS = [
   { id: 'pop', name: 'Анти-хлопок', short: 'Хлопки', hint: 'Смягчает удары «п» и «б» в микрофон', global: true },
   { id: 'dereverb', name: 'Эхо комнаты', short: 'Эхо', hint: 'Убирает гулкость помещения', global: true },
 ];
+// The frequency equalizer: real bands in decibels, for when «характер» is not enough — a bassier
+// voice, less boxiness, more bite. Yours, like the room settings: presets do not touch it.
+const dbFormat = (v) => (v > 0 ? `+${v} дБ` : v < 0 ? `−${-v} дБ` : '0 дБ');
+const FREQS = [
+  { id: 'f100', f: 100, q: 0, name: 'Бас · 100 Гц', short: 'Бас', hint: 'Глубина и «радийный» низ. Вверх — голос басистее и крупнее' },
+  { id: 'f200', f: 200, q: 1, name: 'Тело · 200 Гц', short: 'Тело', hint: 'Плотность и грудной тон. Слишком много — бубнит' },
+  { id: 'f400', f: 400, q: 1.2, name: 'Коробка · 400 Гц', short: 'Коробка', hint: 'Обычно убавляют: уходит «картонный», комнатный призвук' },
+  { id: 'f800', f: 800, q: 1.2, name: 'Нос · 800 Гц', short: 'Нос', hint: 'Гнусавость. Чуть убавить — голос чище' },
+  { id: 'f1600', f: 1600, q: 1, name: 'Середина · 1,6 кГц', short: 'Середина', hint: 'Выводит голос вперёд; много — звучит как телефон' },
+  { id: 'f3200', f: 3200, q: 1, name: 'Разборчивость · 3,2 кГц', short: 'Чёткость', hint: 'Чёткость согласных, слова читаются сквозь игру и музыку' },
+  { id: 'f6000', f: 6000, q: 1.2, name: 'Яркость · 6 кГц', short: 'Яркость', hint: 'Блеск и резкость «с». Убавьте, если режет ухо' },
+  { id: 'f11000', f: 11000, q: 0, name: 'Воздух · 11 кГц', short: 'Воздух', hint: 'Дорогой «студийный» верх и дыхание' },
+].map((p) => ({ ...p, eq: true, min: -12, max: 12, format: dbFormat }));
+PARAMS.push(...FREQS);
 
 const PRESETS = {
   studio: { name: 'Студия', hue: 212, v: { warmth: 55, clarity: 50, air: 45, density: 55, width: 35, space: 12, clean: 45, deess: 50, pitch: 0 } },
@@ -73,6 +87,8 @@ const DEFAULTS = {
   nsEngine: 0, // 0 = fast (RNNoise), 1 = high quality (DeepFilterNet)
   mic: 'auto', // microphone profile: 'auto' (by the device's name), 'none', 'measured', or an id from MIC_PROFILES
   micMeasured: null, // { hp, bands } built by auto-setup from the user's own voice
+  eq: {}, // frequency equalizer: band id → dB
+  eqTab: 'tone', // which bank the equalizer shows: 'tone' (character) or 'freq'
   fx: 'none', // ready voice, see VOICES
   fxCustom: { pitch: 0, formant: 0, robot: 0, drive: 0, echo: 0, space: 0, trem: 0, phone: 0 },
   fxKeys: {}, // voice id → global hotkey
@@ -94,7 +110,7 @@ function loadState() {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY));
     const g = { ...DEFAULTS.g, ...saved?.g };
     if (saved?.ns === true && !saved.g) g.ns = 60; // older builds had an on/off switch
-    return { ...DEFAULTS, ...saved, g, v: { ...DEFAULTS.v, ...saved?.v }, hotkeys: { ...DEFAULTS.hotkeys, ...saved?.hotkeys }, fxCustom: { ...DEFAULTS.fxCustom, ...saved?.fxCustom }, fxKeys: { ...saved?.fxKeys } };
+    return { ...DEFAULTS, ...saved, eq: { ...saved?.eq }, g, v: { ...DEFAULTS.v, ...saved?.v }, hotkeys: { ...DEFAULTS.hotkeys, ...saved?.hotkeys }, fxCustom: { ...DEFAULTS.fxCustom, ...saved?.fxCustom }, fxKeys: { ...saved?.fxKeys } };
   } catch {
     return structuredClone(DEFAULTS);
   }
@@ -143,6 +159,12 @@ function micProfile() {
 function micEq() {
   return micProfile() || MIC_FLAT;
 }
+// Everything the corrective bank carries: the microphone profile, then the user's own frequency bands.
+function eqBands() {
+  const mic = micEq();
+  const own = FREQS.filter((p) => state.eq[p.id]).map((p) => [p.f, state.eq[p.id], p.q]);
+  return { hp: mic.hp, bands: [...mic.bands.slice(0, 6), ...own] };
+}
 const hzText = (f) => (f >= 1000 ? `${String(f / 1000).replace('.', ',')} кГц` : `${f} Гц`);
 const dbText = (g) => `${g > 0 ? '+' : '−'}${String(Math.abs(g)).replace('.', ',')} дБ`;
 
@@ -168,8 +190,11 @@ function pushSystem() {
       ...Object.entries(fxValues()).map(([k, value]) => `${k}=${value}`),
       `ingain=${state.inGain}`,
       `outgain=${state.outGain}`,
-      `michp=${micEq().hp}`,
-      ...Array.from({ length: 6 }, (_, i) => micEq().bands[i] || [0, 0, 0]).flatMap(([f, g, q], i) => [`m${i + 1}f=${f}`, `m${i + 1}g=${g}`, `m${i + 1}q=${q}`]),
+      `michp=${eqBands().hp}`,
+      ...Array.from({ length: 14 }, (_, i) => eqBands().bands[i] || [0, 0, 0]).flatMap(([f, g, q], i) => {
+        const k = '123456789abcde'[i];
+        return [`m${k}f=${f}`, `m${k}g=${g}`, `m${k}q=${q}`];
+      }),
     ].join('\r\n') + '\r\n'
   );
 }
@@ -431,7 +456,7 @@ $('#presetLoad').addEventListener('click', async () => {
   if (data.error) return flash('Это не файл пресета Aura', true);
   // Only the character travels in a file; room settings (noise, echo, gate) stay yours.
   const v = {};
-  for (const p of PARAMS.filter((q) => !q.global)) {
+  for (const p of PARAMS.filter((q) => !q.global && !q.eq)) {
     const n = Number(data.v[p.id]);
     v[p.id] = Number.isFinite(n) ? clamp(Math.round(n), p.min ?? 0, p.max ?? 100) : PRESETS.studio.v[p.id];
   }
@@ -448,15 +473,16 @@ const fill = (input) => {
 };
 const slidersEl = $('#sliders');
 const sliderInputs = {};
-const bank = (p) => (p.global ? state.g : state.v);
+const bank = (p) => (p.eq ? state.eq : p.global ? state.g : state.v);
 const show = (p, v) => (p.format ? p.format(Number(v)) : String(v));
 // One instrument instead of a column of sliders: every setting is a band of an equalizer, and a
 // glowing curve runs through the handles, so a character reads as a shape. Two banks: what the
 // voice is like (presets move these) and what the room needs (they stay yours).
 const EQ_IDLE = ['Эквалайзер голоса', 'Тяните полосы вверх и вниз. Наведите на любую — здесь появится, что она меняет'];
 slidersEl.innerHTML = `<div class="eq-head"><b id="eqName"></b><em id="eqValue"></em><small id="eqHint"></small></div>
+<div class="eq-tools"><div class="segmented eq-tabs" id="eqTabs" role="radiogroup" aria-label="Что показывает эквалайзер"><button type="button" role="radio" data-bank="tone">Характер</button><button type="button" role="radio" data-bank="freq">Частоты</button></div><button type="button" class="link" id="eqReset">Сбросить частоты</button></div>
 <div class="eq-body"><svg class="eq-curve" aria-hidden="true"><defs><linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="eq-stop-a"/><stop offset="1" class="eq-stop-b"/></linearGradient></defs></svg>
-<div class="eq-bank" data-title="Характер"></div><div class="eq-bank room" data-title="Комната и микрофон"></div></div>`;
+<div class="eq-bank" data-bank="tone" data-title="Характер"></div><div class="eq-bank" data-bank="freq" data-title="Частоты, дБ"></div><div class="eq-bank room" data-title="Комната и микрофон"></div></div>`;
 const eqSvg = slidersEl.querySelector('svg');
 const eqBody = slidersEl.querySelector('.eq-body');
 const eqBanks = [...slidersEl.querySelectorAll('.eq-bank')].map((el) => {
@@ -481,6 +507,11 @@ function drawEq() {
   if (!box.width) return; // the page is hidden; the resize observer redraws when it comes back
   eqSvg.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`);
   for (const b of eqBanks) {
+    if (!b.el.offsetParent) { // the bank is switched away
+      b.line.setAttribute('d', '');
+      b.area.setAttribute('d', '');
+      continue;
+    }
     let floor = 0;
     const pts = b.inputs.map((input) => {
       const r = input.parentElement.getBoundingClientRect(); // the upright fader box; the input inside is rotated
@@ -519,7 +550,8 @@ for (const p of PARAMS) {
   const value = label.querySelector('em');
   input._eq = true;
   input.setAttribute('aria-label', `${p.name}. ${p.hint}`);
-  eqBanks[p.global ? 1 : 0].inputs.push(input);
+  const eqBank = eqBanks[p.eq ? 1 : p.global ? 2 : 0];
+  eqBank.inputs.push(input);
   label.addEventListener('pointerenter', () => eqShow(p, input));
   input.addEventListener('focus', () => eqShow(p, input));
   input.addEventListener('blur', () => eqShow(null));
@@ -528,7 +560,7 @@ for (const p of PARAMS) {
     bank(p)[p.id] = Number(input.value);
     value.textContent = show(p, input.value);
     fill(input);
-    if (!p.global) {
+    if (!p.global && !p.eq) {
       // Hand-tuning a character turns it into the user's own preset, so it is never lost.
       state.custom = { ...state.v };
       if (state.preset !== 'custom') {
@@ -548,8 +580,30 @@ for (const p of PARAMS) {
     });
   }
   sliderInputs[p.id] = { input, value };
-  eqBanks[p.global ? 1 : 0].el.append(label);
+  eqBank.el.append(label);
 }
+// «Характер» and «Частоты» share the left side of the card; the room bank stays.
+function showEqTab(tab) {
+  state.eqTab = tab === 'freq' ? 'freq' : 'tone';
+  for (const b of $('#eqTabs').children) b.setAttribute('aria-checked', String(b.dataset.bank === state.eqTab));
+  for (const b of eqBanks) if (b.el.dataset.bank) b.el.hidden = b.el.dataset.bank !== state.eqTab;
+  $('#eqReset').hidden = state.eqTab !== 'freq' || !FREQS.some((p) => state.eq[p.id]);
+  queueEq();
+}
+$('#eqTabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  showEqTab(b.dataset.bank);
+  save();
+});
+$('#eqReset').addEventListener('click', () => {
+  state.eq = {};
+  renderSliders(true);
+  showEqTab('freq');
+  applyAll();
+  save();
+});
+slidersEl.addEventListener('input', () => showEqTab(state.eqTab)); // keeps «Сбросить» in step
 // With `animate`, thumbs and fills glide to the new values together (a preset moved them, and the
 // eye should see which ones and how far). The numbers and the sound switch at once.
 let sliderTween = 0;
@@ -1928,6 +1982,7 @@ async function boot() {
   syncHotkeys();
   renderPreset();
   renderSliders();
+  showEqTab(state.eqTab);
   renderPower();
   rafId = requestAnimationFrame(frame);
 

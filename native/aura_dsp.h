@@ -51,13 +51,14 @@ struct Params {
   float fxFormant = 0;    // semitones the timbre itself is moved by, natural mode only
 
   // Microphone profile: a corrective EQ for the capsule itself, ahead of everything else, so the
-  // character presets start from a flat, clean microphone. Up to kMicBands parametric bands;
+  // character presets start from a flat, clean microphone. The same bank carries the user's own
+  // frequency equalizer (bass, body, presence, air…). Up to kMicBands parametric bands;
   // gain 0 = unused, Q 0 = a shelf (low below 1 kHz, high above).
-  static constexpr int kMicBands = 6;
+  static constexpr int kMicBands = 14;
   float micHp = 85;       // high-pass corner, Hz
-  float micF[kMicBands] = {0, 0, 0, 0, 0, 0};
-  float micG[kMicBands] = {0, 0, 0, 0, 0, 0};
-  float micQ[kMicBands] = {0, 0, 0, 0, 0, 0};
+  float micF[kMicBands] = {};
+  float micG[kMicBands] = {};
+  float micQ[kMicBands] = {};
 };
 
 inline float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
@@ -650,7 +651,7 @@ class Chain {
   bool hasParams_ = false;
   Biquad hpf_, mud_, low_, pres_, air_, exIn_, exOut_, revHp_, revLp_;
   Biquad mic_[Params::kMicBands];
-  bool micOn_[Params::kMicBands] = {false, false, false, false, false, false};
+  bool micOn_[Params::kMicBands] = {};
   Dynamics dyn_;
   Room room_;
   PitchShifter pitch_;

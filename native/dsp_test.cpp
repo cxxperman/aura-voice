@@ -448,7 +448,8 @@ static void runEffects() {
   CHECK(err / ref < 0.05, "width leaks into mono: residue %.1f dB", 10.0 * std::log10(err / ref));
 
   // Microphone profile: parsed, clamped, and audible where it says.
-  const aura::Settings mic = aura::parseSettings("michp=500\nm1f=120\nm1g=2.5\nm1q=0\nm2f=3000\nm2g=40\nm2q=1\nm7f=1000\nm9g=5\n");
+  const aura::Settings mic = aura::parseSettings("michp=500\nm1f=120\nm1g=2.5\nm1q=0\nm2f=3000\nm2g=40\nm2q=1\nmzf=1000\nmeg=5\nmfg=5\n");
+  CHECK(mic.params.micG[13] == 5, "the last equalizer band (me) was not parsed");
   CHECK(mic.params.micHp == 200 && mic.params.micF[0] == 120 && std::fabs(mic.params.micG[0] - 2.5f) < 1e-5f && mic.params.micG[1] == 18 && mic.params.micQ[1] == 1,
         "microphone profile was not parsed or clamped");
   auto toneDb = [&](float hz, const aura::Params& p) {
