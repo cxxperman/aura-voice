@@ -32,6 +32,9 @@ struct Settings {
   bool mute = false;      // hard mute of the microphone, wins over everything
   float nsStrength = 0;   // neural noise suppression, 0 = off .. 1 = maximum
   int nsEngine = 0;       // 0 = RNNoise (fast), 1 = DeepFilterNet (high quality, +30 ms)
+  // Soundboard: a new playId starts the clip in clip.pcm, a new playStop cuts it off.
+  unsigned playId = 0, playStop = 0;
+  float clipGain = 1.0f;
   float dereverb = 0;     // room-echo reduction, 0 = off .. 1 = maximum
   Params params;
 };
@@ -58,6 +61,9 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
     else if (key == "mute") s.mute = v > 0.5;
     else if (key == "ns") s.nsStrength = clamp(v / 100, 0, 1);
     else if (key == "nsengine") s.nsEngine = v > 0.5 ? 1 : 0;
+    else if (key == "playid") s.playId = unsigned(clamp(v, 0, 4.0e9));
+    else if (key == "playstop") s.playStop = unsigned(clamp(v, 0, 4.0e9));
+    else if (key == "clipgain") s.clipGain = clamp(v / 100, 0, 1.5);
     else if (key == "pop") s.params.pop = clamp(v / 100, 0, 1);
     else if (key == "pitch") s.params.pitch = clamp(v, -12, 12);
     else if (key == "dereverb") s.dereverb = clamp(v / 100, 0, 1);

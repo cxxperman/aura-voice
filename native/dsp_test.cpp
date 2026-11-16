@@ -262,11 +262,12 @@ int main(int argc, char** argv) {
     run("everything at maximum", sr, max, false);
   }
 
-  const aura::Settings s = aura::parseSettings("enabled=0\r\nnsengine=1\r\nwarmth=80\r\nfoo=1\r\nair=abc\r\ningain=99\r\n=5\r\nwidth=-3\r\nns=70\r\nmute=1\r\npop=250\r\npitch=-30\r\ndereverb=40\r\n");
+  const aura::Settings s = aura::parseSettings("enabled=0\r\nnsengine=1\r\nplayid=7\r\nplaystop=-5\r\nclipgain=400\r\nwarmth=80\r\nfoo=1\r\nair=abc\r\ningain=99\r\n=5\r\nwidth=-3\r\nns=70\r\nmute=1\r\npop=250\r\npitch=-30\r\ndereverb=40\r\n");
   CHECK(s.params.pitch == -12.0f && std::fabs(s.dereverb - 0.4f) < 1e-5f, "pitch/dereverb were not parsed");
   CHECK(std::fabs(s.nsStrength - 0.7f) < 1e-5f && s.mute && s.params.pop == 1.0f, "ns/mute/pop were not parsed");
   CHECK(!s.enabled, "enabled=0 was not parsed");
   CHECK(s.nsEngine == 1, "nsengine was not parsed");
+  CHECK(s.playId == 7 && s.playStop == 0 && s.clipGain == 1.5f, "soundboard keys were not parsed");
   CHECK(std::fabs(s.params.warmth - 0.8f) < 1e-5f, "warmth=%f", s.params.warmth);
   CHECK(std::fabs(s.params.air - aura::Params().air) < 1e-5f, "garbage changed air to %f", s.params.air);
   CHECK(s.params.inGainDb == 24.0f, "ingain was not clamped: %f", s.params.inGainDb);

@@ -32,6 +32,8 @@ struct Live {
   std::atomic<bool> enabled{true};
   std::atomic<bool> mute{false};
   std::atomic<int> nsEngine{0};
+  std::atomic<unsigned> playId{0}, playStop{0};
+  std::atomic<float> clipGain{1.0f};
   // DeepFilterNet: 0 = not available, 1 = available, -1 = switched off because loading it crashed last time.
   std::atomic<int> deepState{0};
   std::atomic<int> deepActive{0};
@@ -57,6 +59,9 @@ void store(const aura::Settings& s) {
   gLive.enabled.store(s.enabled, std::memory_order_relaxed);
   gLive.mute.store(s.mute, std::memory_order_relaxed);
   gLive.nsEngine.store(s.nsEngine, std::memory_order_relaxed);
+  gLive.playId.store(s.playId, std::memory_order_relaxed);
+  gLive.playStop.store(s.playStop, std::memory_order_relaxed);
+  gLive.clipGain.store(s.clipGain, std::memory_order_relaxed);
 }
 
 aura::Settings load() {
@@ -69,6 +74,9 @@ aura::Settings load() {
   s.enabled = gLive.enabled.load(std::memory_order_relaxed);
   s.mute = gLive.mute.load(std::memory_order_relaxed);
   s.nsEngine = gLive.nsEngine.load(std::memory_order_relaxed);
+  s.playId = gLive.playId.load(std::memory_order_relaxed);
+  s.playStop = gLive.playStop.load(std::memory_order_relaxed);
+  s.clipGain = gLive.clipGain.load(std::memory_order_relaxed);
   return s;
 }
 
@@ -108,6 +116,76 @@ SRWLOCK gWatchLock = SRWLOCK_INIT;
 long gWatchUsers = 0;
 HANDLE gWatchThread = nullptr;
 HANDLE gWatchStop = nullptr;
+
+// ───── Soundboard ─────
+// The window decodes a sound to mono 48 kHz floats and drops it into clip.pcm; the watcher
+// loads it (never the audio thread) and publishes it. Every open stream then mixes it into
+// the microphone from the start. Replaced clips are kept alive a few seconds, until no audio
+// thread can still be reading them.
+struct Clip {
+  std::vector<float> samples;
+};
+std::atomic<Clip*> gClip{nullptr};
+std::atomic<unsigned> gClipSerial{0};
+std::vector<std::pair<Clip*, ULONGLONG>> gRetiredClips; // watcher thread only
+
+void loadClip() {
+  const std::wstring path = aura::dataDir() + L"\\clip.pcm";
+  const HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (f == INVALID_HANDLE_VALUE) return;
+  const DWORD maxBytes = 30 * 48000 * sizeof(float); // half a minute at most
+  DWORD size = GetFileSize(f, nullptr);
+  if (size == INVALID_FILE_SIZE || size < sizeof(float)) {
+    CloseHandle(f);
+    return;
+  }
+  size = std::min(size, maxBytes) / sizeof(float) * sizeof(float);
+  Clip* clip = new (std::nothrow) Clip();
+  bool ok = clip != nullptr;
+  if (ok) {
+    try {
+      std::vector<float> raw(size / sizeof(float));
+      DWORD got = 0;
+      ok = ReadFile(f, raw.data(), size, &got, nullptr) && got == size;
+      const int rate = gLive.sampleRate.load();
+      if (ok && rate > 0 && rate != 48000) {
+        // The file is always 48 kHz; follow the stream when the microphone runs at another rate.
+        const double step = 48000.0 / rate;
+        clip->samples.resize(size_t(double(raw.size()) / step));
+        for (size_t i = 0; i < clip->samples.size(); i++) {
+          const double at = double(i) * step;
+          const size_t i0 = size_t(at), i1 = std::min(i0 + 1, raw.size() - 1);
+          clip->samples[i] = float(raw[i0] + (raw[i1] - raw[i0]) * (at - double(i0)));
+        }
+      } else {
+        clip->samples = std::move(raw);
+      }
+      for (float& s : clip->samples) s = (s == s) ? std::max(-1.0f, std::min(1.0f, s)) : 0.0f; // never trust a file
+    } catch (const std::bad_alloc&) {
+      ok = false;
+    }
+  }
+  CloseHandle(f);
+  if (!ok) {
+    delete clip;
+    return;
+  }
+  if (Clip* old = gClip.exchange(clip, std::memory_order_acq_rel)) gRetiredClips.push_back({old, GetTickCount64()});
+  gClipSerial.fetch_add(1, std::memory_order_release);
+}
+
+void sweepRetiredClips() {
+  const ULONGLONG now = GetTickCount64();
+  for (size_t i = 0; i < gRetiredClips.size();) {
+    if (now - gRetiredClips[i].second > 5000) {
+      delete gRetiredClips[i].first;
+      gRetiredClips.erase(gRetiredClips.begin() + i);
+    } else {
+      i++;
+    }
+  }
+}
 
 // ───── DeepFilterNet loading ─────
 // The model takes ~250 ms to load, so it is loaded here — by LockForProcess or by the watcher
@@ -169,12 +247,18 @@ DWORD WINAPI watch(void*) {
   const std::wstring settings = aura::dataDir() + L"\\settings.txt";
   const std::wstring status = aura::dataDir() + L"\\status.txt";
   FILETIME seen = {};
+  unsigned seenPlay = gLive.playId.load(); // whatever was asked for before we started is old news
   for (int tick = 0;; tick++) {
     WIN32_FILE_ATTRIBUTE_DATA info;
     if (GetFileAttributesExW(settings.c_str(), GetFileExInfoStandard, &info) &&
         CompareFileTime(&info.ftLastWriteTime, &seen) != 0 && readSettings(settings)) {
       seen = info.ftLastWriteTime;
     }
+    if (const unsigned play = gLive.playId.load(); play != seenPlay) {
+      seenPlay = play;
+      loadClip();
+    }
+    sweepRetiredClips();
 #ifdef AURA_HAVE_DFN
     if (tick % 8 == 0) {
       deepAllowed(false);
@@ -354,6 +438,9 @@ class AuraApo final : public INonDelegatingUnknown,
     gLive.sampleRate = int(f.fFramesPerSecond);
     gLive.channels = int(channels_);
     sampleRate_ = f.fFramesPerSecond;
+    clipSerial_ = gClipSerial.load();
+    clipStop_ = gLive.playStop.load();
+    clipPos_ = SIZE_MAX; // a stream that opens mid-clip does not join it
     watchAcquire();
     AcquireSRWLockExclusive(&gInstancesLock);
     gInstances.push_back(this);
@@ -388,6 +475,7 @@ class AuraApo final : public INonDelegatingUnknown,
 
     if (frames > capacity_ || (mix_ == 0.0f && target == 0.0f)) {
       if (dst != src) memcpy(dst, src, size_t(frames) * ch * sizeof(float));
+      mixClip(dst, frames, ch);
       applyMute(dst, frames * ch, s.mute);
       raise(gLive.peakOut, muteGain_ * peakIn);
       measureLoudness(dst, frames, ch);
@@ -434,6 +522,7 @@ class AuraApo final : public INonDelegatingUnknown,
       }
     }
     mix_ = target;
+    mixClip(dst, frames, ch);
     applyMute(dst, frames * ch, s.mute);
     float peakOut = 0;
     for (UINT32 i = 0; i < frames * ch; i++) peakOut = std::max(peakOut, std::fabs(dst[i]));
@@ -447,6 +536,29 @@ class AuraApo final : public INonDelegatingUnknown,
   STDMETHODIMP_(UINT32) CalcOutputFrames(UINT32 inputFrames) override { return inputFrames; }
 
  private:
+  // Soundboard: add the current clip to what leaves the microphone (audio thread).
+  void mixClip(float* dst, UINT32 frames, UINT32 ch) {
+    const unsigned serial = gClipSerial.load(std::memory_order_acquire);
+    if (serial != clipSerial_) {
+      clipSerial_ = serial;
+      clipPos_ = 0;
+    }
+    const unsigned stop = gLive.playStop.load(std::memory_order_relaxed);
+    if (stop != clipStop_) {
+      clipStop_ = stop;
+      clipPos_ = SIZE_MAX;
+    }
+    const Clip* clip = gClip.load(std::memory_order_acquire);
+    if (!clip || clipPos_ >= clip->samples.size()) return;
+    const float gain = gLive.clipGain.load(std::memory_order_relaxed);
+    const size_t n = std::min(size_t(frames), clip->samples.size() - clipPos_);
+    for (size_t i = 0; i < n; i++) {
+      const float v = clip->samples[clipPos_ + i] * gain;
+      for (UINT32 c = 0; c < ch; c++) dst[i * ch + c] = std::max(-1.0f, std::min(1.0f, dst[i * ch + c] + v));
+    }
+    clipPos_ += n;
+  }
+
   void leave() {
     AcquireSRWLockExclusive(&gInstancesLock);
     gInstances.erase(std::remove(gInstances.begin(), gInstances.end(), this), gInstances.end());
@@ -520,6 +632,8 @@ class AuraApo final : public INonDelegatingUnknown,
   aura::DeepDenoiser deep_;
 #endif
   float sampleRate_ = 48000;
+  unsigned clipSerial_ = 0, clipStop_ = 0;
+  size_t clipPos_ = SIZE_MAX;
   aura::Biquad kShelf_[2], kHigh_[2];
   float meanSquare_[2] = {0, 0};
   float loudnessCoef_ = 0;
