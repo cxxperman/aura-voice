@@ -1,8 +1,9 @@
 // "High quality" noise suppression: DeepFilterNet 3 (Hendrik Schröter, MIT / Apache-2.0),
 // linked in as a static library built from its Rust sources.
 //
-// Much stronger than RNNoise, at the price of ~40 ms of latency (the network looks two frames
-// ahead) and a few percent of one CPU core. 48 kHz mono, 10 ms frames.
+// Much stronger than RNNoise, at the price of ~30 ms of latency (the network looks two frames
+// ahead) and a few percent of one CPU core. 48 kHz mono, 10 ms frames. Like the RNNoise wrapper,
+// whole 10 ms buffers are processed on the spot; only odd-sized ones are collected first.
 #pragma once
 
 #include <atomic>
@@ -59,6 +60,18 @@ class DeepDenoiser {
       df_set_atten_lim(s, strength >= 0.995f ? 100.0f : 6.0f + strength * 54.0f);
       df_set_post_filter_beta(s, strength > 0.62f ? 0.02f : 0.0f);
     }
+    if (fill_ == 0 && frames % kFrame == 0) {
+      direct_ = true;
+      for (int at = 0; at < frames; at += kFrame) {
+        for (int k = 0; k < kFrame; k++) in_[k] = x[at + k];
+        df_process_frame(s, in_, x + at);
+      }
+      return;
+    }
+    if (direct_) {
+      direct_ = false;
+      for (int k = 0; k < kFrame; k++) out_[k] = 0;
+    }
     for (int i = 0; i < frames; i++) {
       in_[fill_] = x[i];
       x[i] = out_[fill_];
@@ -75,6 +88,7 @@ class DeepDenoiser {
   float out_[kFrame] = {};
   int fill_ = 0;
   float lastStrength_ = -1;
+  bool direct_ = false;
 };
 
 } // namespace aura

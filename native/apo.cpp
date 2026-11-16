@@ -260,14 +260,15 @@ DWORD WINAPI watch(void*) {
     }
     sweepRetiredClips();
 #ifdef AURA_HAVE_DFN
-    if (tick % 8 == 0) {
+    if (tick % 50 == 0) {
       deepAllowed(false);
       deepHousekeeping();
       if (gLive.nsEngine.load() == 1) loadDeepEverywhere(); // the user switched engines while a stream is open
     }
 #endif
-    writeStatus(status); // every 120 ms: it doubles as the level meter feed
-    if (WaitForSingleObject(gWatchStop, 120) == WAIT_OBJECT_0) break;
+    if (tick % 6 == 0) writeStatus(status); // every 120 ms: it doubles as the level meter feed
+    // 20 ms: a pressed sound pad or a moved slider reaches the microphone without a noticeable wait.
+    if (WaitForSingleObject(gWatchStop, 20) == WAIT_OBJECT_0) break;
   }
   DeleteFileW(status.c_str());
   return 0;

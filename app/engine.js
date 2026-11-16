@@ -127,6 +127,7 @@ class Engine {
   // so nothing is sent to a virtual cable — the graph only meters and monitors.
   async start(state, { test = false, system = false } = {}) {
     this.system = system;
+    this._sink = undefined;
     const c = (this.ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 }));
     const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
     await c.audioWorklet.addModule(url);
@@ -147,7 +148,9 @@ class Engine {
     } else {
       await this.openMic(state);
     }
-    await this.setOutput(test || system ? null : state.outputId);
+    // In system mode the context's own output is the monitor path (see _route): low latency, no <audio> element.
+    if (system) this._route();
+    else await this.setOutput(test ? null : state.outputId || null);
     this.audio.srcObject = this.n.msDest.stream;
     await this.setMonitorDevice(state.monitorId);
     this.audio.play().catch(() => {});
@@ -335,15 +338,29 @@ class Engine {
     p.get('pitch').setValueAtTime(state.v.pitch || 0, t);
 
     this.monitor = state.monitor;
+    this.monitorId = state.monitorId || '';
     this._route();
   }
 
   _route() {
     if (!this.n) return;
     const t = this.ctx.currentTime;
+    const listen = this.sampleMode || this.monitor;
+    if (this.system) {
+      // Nothing goes to a cable here, so the context plays straight into the headphones — the
+      // shortest path the browser has — and is pointed at no device at all when nobody listens.
+      this.n.mainOut.gain.setTargetAtTime(listen ? 1 : 0, t, 0.02);
+      this.n.monOut.gain.setTargetAtTime(0, t, 0.02);
+      const want = listen ? this.monitorId || '' : null;
+      if (want !== this._sink) {
+        this._sink = want;
+        this.setOutput(want);
+      }
+      return;
+    }
     // While a recorded sample loops, keep it out of the virtual cable — it is for the user's ears only.
     this.n.mainOut.gain.setTargetAtTime(this.sampleMode ? 0 : 1, t, 0.02);
-    this.n.monOut.gain.setTargetAtTime(this.sampleMode || this.monitor ? 1 : 0, t, 0.02);
+    this.n.monOut.gain.setTargetAtTime(listen ? 1 : 0, t, 0.02);
   }
 
   /** Hold-to-compare: crossfade to the untouched microphone. */
@@ -383,7 +400,7 @@ class Engine {
   async setOutput(deviceId) {
     if (!this.ctx) return;
     try {
-      await this.ctx.setSinkId(deviceId || { type: 'none' });
+      await this.ctx.setSinkId(deviceId == null ? { type: 'none' } : deviceId); // '' is the system default
     } catch {
       await this.ctx.setSinkId({ type: 'none' });
     }

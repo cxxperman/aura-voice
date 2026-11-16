@@ -209,7 +209,7 @@ function setStatus(text, isError = false) {
 // What the optional stages cost: each one has to look a little way ahead.
 function latencyText() {
   const deep = state.nsEngine === 1 && moduleLevels?.engine === 1;
-  const ms = (state.g.ns > 0 ? (deep ? 40 : 10) : 0) + (state.g.dereverb > 0 ? 11 : 0) + (state.v.pitch ? 22 : 0);
+  const ms = (state.g.ns > 0 ? (deep ? 30 : 10) : 0) + (state.g.dereverb > 0 ? 5 : 0) + (state.v.pitch ? 22 : 0);
   return ms ? `задержка около ${ms} мс` : 'без задержки';
 }
 function liveStatus() {
@@ -432,7 +432,7 @@ async function refreshDevices() {
     const found = VIRTUAL.map((v) => outputs.find((d) => v.re.test(d.label))).find(Boolean);
     state.outputId = found ? found.deviceId : '';
     save();
-    if (engine.running && !TEST) await engine.setOutput(state.outputId);
+    if (engine.running && !TEST && !sys.installed) await engine.setOutput(state.outputId || null);
   }
 
   fillSelect($('#inputId'), inputs, state.inputId, 'Системный по умолчанию');
@@ -468,7 +468,7 @@ $('#inputId').addEventListener('change', async (e) => {
 $('#outputId').addEventListener('change', async (e) => {
   state.outputId = e.target.value;
   save();
-  await engine.setOutput(state.outputId);
+  if (!sys.installed) await engine.setOutput(state.outputId || null);
   renderRoute();
   liveStatus();
 });
@@ -476,6 +476,7 @@ $('#monitorId').addEventListener('change', async (e) => {
   state.monitorId = e.target.value;
   save();
   await engine.setMonitorDevice(state.monitorId);
+  engine.apply(state);
 });
 navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
 
@@ -568,6 +569,8 @@ function renderPads() {
     })
   );
   $('#padsEmpty').hidden = state.pads.length > 0;
+  // Warm the first pads up in the background, so even their first press is instant.
+  for (const pad of state.pads.slice(0, 12)) padSamples(pad).catch(() => {});
 }
 
 function stopLocalPad() {
@@ -614,21 +617,34 @@ async function playLocal(mono, onEnded) {
   return source;
 }
 
-async function playPad(pad) {
-  if (!sys.installed || !engine.running) return flash('Звуки идут через модуль: встройте Aura в микрофон и включите сферу.', true);
+// Decoded pads, ready to fire: the second press of a pad costs no reading or decoding at all.
+const padCache = new Map();
+async function padSamples(pad) {
+  if (padCache.has(pad.id)) return padCache.get(pad.id);
   const bytes = await window.auraSystem.readSound(pad.id);
-  if (!bytes) return flash('Файл этого звука не найден.', true);
+  if (!bytes) return null;
+  const mono = await decodeSound(bytes);
+  padCache.set(pad.id, mono);
+  if (padCache.size > 60) padCache.delete(padCache.keys().next().value);
+  return mono;
+}
+
+// The soundboard is its own thing: it does not need voice processing switched on. The module
+// mixes the sound into the microphone whenever any program is recording from it.
+async function playPad(pad) {
   let mono;
   try {
-    mono = await decodeSound(bytes);
+    mono = await padSamples(pad);
   } catch {
     return flash('Не получилось прочитать этот файл как звук.', true);
   }
+  if (!mono) return flash('Файл этого звука не найден.', true);
+  playLocal(mono);
+  if (!sys.installed) return flash('Звук слышите только вы: чтобы он шёл в микрофон, встройте Aura в него на вкладке «Настройки».', true);
   if (!(await window.auraSystem.writeClip(mono))) return flash('Не удалось передать звук модулю.', true);
   state.playId++;
   save();
   pushSystem();
-  playLocal(mono);
 }
 
 $('#padAdd').addEventListener('click', async () => {
@@ -798,7 +814,7 @@ const engineSelect = $('#nsEngine');
 function renderEngine() {
   const deep = moduleLevels?.deep; // 1 = available, -1 = switched off after a crash, 0/undefined = not there
   engineSelect.disabled = !sys.installed || !deep;
-  engineSelect.options[1].textContent = deep === -1 ? 'Качественный — отключён после сбоя, выберите, чтобы попробовать снова' : 'Качественный — DeepFilterNet, 40 мс';
+  engineSelect.options[1].textContent = deep === -1 ? 'Качественный — отключён после сбоя, выберите, чтобы попробовать снова' : 'Качественный — DeepFilterNet, 30 мс';
   engineSelect.value = String(state.nsEngine);
 }
 engineSelect.addEventListener('change', async () => {

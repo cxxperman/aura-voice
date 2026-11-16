@@ -67,7 +67,7 @@
             <button type="button" class="pill small" id="padAdd">Из файла</button>
           </div>
           <div class="pads" id="pads"></div>
-          <p class="pads-empty" id="padsEmpty">Здесь будут ваши звуки: добавьте их из каталога ниже или из файла. Нажатие проигрывает звук в микрофон — его слышат все программы — и вам в наушники. Первые девять включаются ещё и по Ctrl+Alt+1…9, даже из игры.</p>
+          <p class="pads-empty" id="padsEmpty">Здесь будут ваши звуки: добавьте их из каталога ниже или из файла. Нажатие проигрывает звук в микрофон — его слышат все программы — и вам в наушники. Обработку голоса для этого включать не нужно. Первые девять включаются ещё и по Ctrl+Alt+1…9, даже из игры.</p>
         </div>
 
         <div class="card catalog">
@@ -101,7 +101,7 @@
           <label class="field"><span>Микрофон</span><select id="inputId"></select></label>
           <label class="field"><span>Выход в приложения</span><select id="outputId"></select></label>
           <label class="field"><span>Наушники</span><select id="monitorId"></select></label>
-          <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 40 мс</option></select></label>
+          <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 30 мс</option></select></label>
           <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
           <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
           <p class="route" id="route"></p>

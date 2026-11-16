@@ -1,7 +1,9 @@
 // Neural noise suppression (RNNoise, Xiph.Org, BSD-3-Clause).
 //
-// RNNoise works on 10 ms frames of 48 kHz mono, so this wrapper buffers the stream into
-// frames and hands back the previous frame: a constant 10 ms of latency, in any block size.
+// RNNoise works on 10 ms frames of 48 kHz mono and is itself 10 ms late (its analysis windows
+// overlap by half). The Windows audio engine normally hands us exactly such 10 ms buffers, and
+// then every buffer is processed on the spot — no extra delay. Only when a buffer has an odd
+// size does this wrapper fall back to collecting frames, which costs one more frame (10 ms).
 //
 // On top of the model's own cleaning it can close a "voice gate": RNNoise also reports how
 // likely each frame is to contain speech, and everything that is confidently not speech
@@ -36,6 +38,7 @@ class Denoiser {
     hold_ = 0;
     gate_ = 1;
     vad_ = 0;
+    direct_ = false;
     return true;
   }
 
@@ -43,32 +46,50 @@ class Denoiser {
   float voiceProbability() const { return vad_; } // of the last frame, 0..1
 
   // In place.
-  //   amount    0..1  how much of the cleaned signal replaces the (equally delayed) original
+  //   amount    0..1  how much of the cleaned signal replaces the original
   //   gateFloor 0..1  gain applied while no voice is detected; 1 = voice gate off
   void process(float* x, int frames, float amount, float gateFloor) {
+    // Whole frames and nothing pending: run them straight through.
+    if (fill_ == 0 && frames % kFrame == 0) {
+      direct_ = true;
+      for (int at = 0; at < frames; at += kFrame) {
+        for (int k = 0; k < kFrame; k++) in_[k] = x[at + k];
+        frame(amount, gateFloor);
+        for (int k = 0; k < kFrame; k++) x[at + k] = out_[k];
+      }
+      return;
+    }
+    if (direct_) { // switching to buffered mode: do not replay the last direct frame
+      direct_ = false;
+      for (int k = 0; k < kFrame; k++) out_[k] = 0;
+    }
     for (int i = 0; i < frames; i++) {
       in_[fill_] = x[i];
       x[i] = out_[fill_];
       if (++fill_ == kFrame) {
         fill_ = 0;
-        float scaled[kFrame], clean[kFrame];
-        for (int k = 0; k < kFrame; k++) scaled[k] = in_[k] * 32768.0f; // the model expects 16-bit scale
-        vad_ = rnnoise_process_frame(state_, clean, scaled);
-
-        // Voice gate: opens on the very frame speech is detected in (we already hold the whole
-        // frame, so no word onset is lost) and stays open 300 ms after it stops.
-        if (vad_ >= 0.55f) hold_ = 30;
-        else if (hold_ > 0) hold_--;
-        const float target = hold_ > 0 ? 1.0f : gateFloor;
-        for (int k = 0; k < kFrame; k++) {
-          gate_ += (target - gate_) * (target > gate_ ? 0.02f : 0.0012f); // ~1 ms open, ~17 ms close
-          out_[k] = (in_[k] + (clean[k] / 32768.0f - in_[k]) * amount) * gate_;
-        }
+        frame(amount, gateFloor);
       }
     }
   }
 
  private:
+  // in_ → out_
+  void frame(float amount, float gateFloor) {
+    float scaled[kFrame], clean[kFrame];
+    for (int k = 0; k < kFrame; k++) scaled[k] = in_[k] * 32768.0f; // the model expects 16-bit scale
+    vad_ = rnnoise_process_frame(state_, clean, scaled);
+
+    // Voice gate: opens on the very frame speech is detected in and stays open 300 ms after it stops.
+    if (vad_ >= 0.55f) hold_ = 30;
+    else if (hold_ > 0) hold_--;
+    const float target = hold_ > 0 ? 1.0f : gateFloor;
+    for (int k = 0; k < kFrame; k++) {
+      gate_ += (target - gate_) * (target > gate_ ? 0.02f : 0.0012f); // ~1 ms open, ~17 ms close
+      out_[k] = (in_[k] + (clean[k] / 32768.0f - in_[k]) * amount) * gate_;
+    }
+  }
+
   void release() {
     if (state_) rnnoise_destroy(state_);
     state_ = nullptr;
@@ -81,6 +102,7 @@ class Denoiser {
   int hold_ = 0;
   float gate_ = 1;
   float vad_ = 0;
+  bool direct_ = false;
 };
 
 // One "strength" knob, the way Krisp-style apps expose it:

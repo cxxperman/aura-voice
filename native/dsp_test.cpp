@@ -243,7 +243,94 @@ static void runDeep(const char* model) {
 }
 #endif
 
+// How late does each stage deliver? Measured, not assumed: a voice-like glide (its pitch keeps
+// moving, so the match is unambiguous) goes in, and the output is slid against it until it fits.
+static int lagOf(const std::vector<float>& in, const std::vector<float>& out, int maxLag) {
+  int best = 0;
+  double bestScore = -1e30;
+  for (int lag = 0; lag <= maxLag; lag++) {
+    double score = 0;
+    for (size_t i = 30000; i < 90000; i += 2) score += double(in[i]) * out[i + size_t(lag)];
+    if (score > bestScore) {
+      bestScore = score;
+      best = lag;
+    }
+  }
+  return best;
+}
+
+static void runLatency(const char* model) {
+  const int sr = 48000;
+  std::vector<float> x(size_t(sr) * 3, 0.0f);
+  double phase = 0;
+  for (size_t i = 0; i < x.size(); i++) {
+    const float t = float(i) / sr;
+    phase += 2.0 * 3.14159265358979 * (120.0 + 40.0 * t) / sr; // 120 → 240 Hz
+    if (t > 0.4f && t < 2.2f) {
+      for (int k = 1; k <= 15; k++) x[i] += 0.05f * float(std::sin(phase * k)) / float(k);
+      x[i] *= 0.6f + 0.4f * std::sin(2 * aura::kPi * 3.0f * t);
+    }
+  }
+  auto chunks = [&](std::vector<float>& y, int size, auto&& fn) {
+    for (size_t at = 0; at + size_t(size) <= y.size(); at += size_t(size)) fn(y.data() + at, size);
+  };
+  auto report = [&](const char* name, const std::vector<float>& y) {
+    const int lag = lagOf(x, y, 3000);
+    std::printf("latency: %-34s %5.1f ms\n", name, lag * 1000.0 / sr);
+    return lag;
+  };
+
+  std::vector<float> y = x;
+  aura::Denoiser direct;
+  direct.prepare(float(sr));
+  chunks(y, 480, [&](float* p, int n) { direct.process(p, n, 1.0f, 1.0f); });
+  const int fast = report("RNNoise, 10 ms buffers (normal)", y);
+
+  y = x;
+  aura::Denoiser buffered;
+  buffered.prepare(float(sr));
+  chunks(y, 441, [&](float* p, int n) { buffered.process(p, n, 1.0f, 1.0f); });
+  const int slow = report("RNNoise, odd-sized buffers", y);
+
+  y = x;
+  aura::Dereverb echo;
+  echo.prepare(float(sr));
+  chunks(y, 480, [&](float* p, int n) { echo.process(p, n, 1.0f); });
+  const int room = report("room echo", y);
+
+  y = x;
+  aura::PitchShifter shifter;
+  shifter.prepare(float(sr));
+  for (float& s : y) s = shifter.process(s, 1.0f); // ratio 1 keeps the taps still: the shortest it can be
+  report("pitch shifter (at rest)", y);
+
+  y = x;
+  aura::Chain chain;
+  chain.prepare(float(sr));
+  std::vector<float> right(y.size());
+  chunks(y, 480, [&](float* p, int n) { chain.process(p, p, right.data(), n); });
+  const int core = report("voice chain itself", y);
+
+  CHECK(fast <= 480, "RNNoise is %d samples late on 10 ms buffers; it should add no buffering", fast);
+  CHECK(slow > fast, "the buffered path should be the slower one (%d vs %d samples)", slow, fast);
+  CHECK(room <= 300, "room echo is %d samples late", room);
+  CHECK(core <= 8, "the voice chain itself must be instant, measured %d samples", core);
+#ifdef AURA_HAVE_DFN
+  if (model) {
+    y = x;
+    aura::DeepDenoiser deep;
+    deep.load(model, float(sr));
+    chunks(y, 480, [&](float* p, int n) { deep.process(p, n, 1.0f); });
+    const int lag = report("DeepFilterNet, 10 ms buffers", y);
+    CHECK(lag <= 1500, "DeepFilterNet is %d samples late", lag);
+  }
+#else
+  (void)model;
+#endif
+}
+
 int main(int argc, char** argv) {
+  runLatency(argc > 1 ? argv[1] : nullptr);
   (void)argc;
   (void)argv;
 #ifdef AURA_HAVE_DFN

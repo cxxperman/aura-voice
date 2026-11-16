@@ -5,7 +5,7 @@
 // the band down by however much of its current power that prediction explains (spectral
 // subtraction, after Lebart / Habets). Direct speech is louder than its own tail and passes.
 //
-// Short-time Fourier transform, 75 % overlap; adds one frame of latency (10.7 ms at 48 kHz).
+// Short-time Fourier transform, 75 % overlap, short frames: adds 5.3 ms of latency at 48 kHz.
 #pragma once
 
 #include <algorithm>
@@ -56,7 +56,7 @@ class Dereverb {
  public:
   // Allocates; call outside the audio thread.
   void prepare(float sr) {
-    n_ = sr > 50000 ? 1024 : 512;
+    n_ = sr > 50000 ? 512 : 256; // ~5 ms: enough resolution for echo, half the delay of a longer frame
     hop_ = n_ / 4;
     bins_ = n_ / 2 + 1;
     window_.resize(size_t(n_));
@@ -103,11 +103,11 @@ class Dereverb {
     float* past = &history_[size_t(historyPos_ * bins_)]; // band powers from `delayFrames_` frames ago
     for (int k = 0; k < bins_; k++) {
       const float power = re_[size_t(k)] * re_[size_t(k)] + im_[size_t(k)] * im_[size_t(k)];
-      smooth_[size_t(k)] += (power - smooth_[size_t(k)]) * 0.35f;
+      smooth_[size_t(k)] += (power - smooth_[size_t(k)]) * 0.2f;
       const float late = decay_ * past[k];
       // Never cut a band by more than 12 dB: deeper than that starts to sound like a phone call.
       const float want = std::sqrt(std::max(1.0f - strength * 1.6f * late / (power + 1e-12f), 0.0625f));
-      gain_[size_t(k)] += (want - gain_[size_t(k)]) * (want > gain_[size_t(k)] ? 0.7f : 0.4f);
+      gain_[size_t(k)] += (want - gain_[size_t(k)]) * (want > gain_[size_t(k)] ? 0.45f : 0.22f);
       past[k] = smooth_[size_t(k)];
 
       const float g = gain_[size_t(k)];
