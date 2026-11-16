@@ -335,6 +335,112 @@ ipcMain.handle('system:devices', () => {
   });
 });
 
+/* ───── Rendering recordings through the module's own chain (native/render.cpp) ─────
+ * The page decodes audio (only it has a decoder) and hands over mono float32 at 48 kHz; the tool
+ * returns stereo. A short sample comes straight back; a file is streamed to disk as a WAV. */
+const renderTool = () => path.join(app.isPackaged ? path.join(process.resourcesPath, 'native') : path.join(__dirname, 'native', 'bin'), 'AuraRender.exe');
+const renderModel = () => path.join(path.dirname(renderTool()), 'DeepFilterNet3_onnx.tar.gz');
+const renderDir = () => {
+  const dir = path.join(app.getPath('temp'), 'aura-render');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+};
+const cleanSettings = (text) => String(text || '').split(/\r?\n/).filter((l) => /^[a-z0-9]{1,16}=-?[0-9.]{1,12}$/.test(l)).slice(0, 200).join('\n') + '\n';
+function runRender(inFile, outFile, settings) {
+  return new Promise((resolve) => {
+    const cfg = inFile + '.txt';
+    fs.writeFileSync(cfg, cleanSettings(settings));
+    const args = [inFile, outFile, cfg];
+    if (fs.existsSync(renderModel())) args.push(renderModel());
+    execFile(renderTool(), args, { windowsHide: true, timeout: 20 * 60 * 1000 }, (err) => {
+      fs.rm(cfg, { force: true }, () => {});
+      resolve(!err);
+    });
+  });
+}
+let renderSeq = 0;
+ipcMain.handle('render:available', () => fs.existsSync(renderTool()));
+ipcMain.handle('render:sample', async (_e, pcm, settings) => {
+  const bytes = Buffer.from(pcm instanceof ArrayBuffer ? pcm : pcm?.buffer || []);
+  if (!bytes.length || bytes.length % 4 || bytes.length > 4 * 48000 * 60 || !fs.existsSync(renderTool())) return null;
+  const base = path.join(renderDir(), `sample-${process.pid}-${++renderSeq}`);
+  try {
+    fs.writeFileSync(base + '.in', bytes);
+    if (!(await runRender(base + '.in', base + '.out', settings))) return null;
+    const out = fs.readFileSync(base + '.out');
+    return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+  } catch {
+    return null;
+  } finally {
+    for (const ext of ['.in', '.out']) fs.rm(base + ext, { force: true }, () => {});
+  }
+});
+// A file: ask where to save first, take the audio in pieces, then render and write the WAV.
+const renderJobs = new Map();
+ipcMain.handle('render:begin', async (_e, name) => {
+  const safe = String(name || 'Aura').replace(/\.[^.]{1,5}$/, '').replace(/[^\p{L}\p{N} _.()-]/gu, '').slice(0, 80) || 'Aura';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, { title: 'Сохранить запись', defaultPath: `${safe} — Aura.wav`, filters: [{ name: 'WAV', extensions: ['wav'] }] });
+  if (canceled || !filePath) return null;
+  const token = `${process.pid}-${++renderSeq}`;
+  const base = path.join(renderDir(), 'file-' + token);
+  renderJobs.set(token, { base, target: filePath, bytes: 0, fd: fs.openSync(base + '.in', 'w') });
+  return token;
+});
+ipcMain.handle('render:chunk', (_e, token, pcm) => {
+  const job = renderJobs.get(token);
+  const bytes = Buffer.from(pcm instanceof ArrayBuffer ? pcm : pcm?.buffer || []);
+  if (!job || bytes.length % 4 || job.bytes + bytes.length > 4 * 48000 * 3600 * 3) return false; // three hours at most
+  fs.writeSync(job.fd, bytes);
+  job.bytes += bytes.length;
+  return true;
+});
+ipcMain.handle('render:finish', async (_e, token, settings) => {
+  const job = renderJobs.get(token);
+  if (!job) return { ok: false };
+  renderJobs.delete(token);
+  fs.closeSync(job.fd);
+  const clean = () => { for (const ext of ['.in', '.out']) fs.rm(job.base + ext, { force: true }, () => {}); };
+  try {
+    if (!job.bytes) return { ok: false };
+    const frames = job.bytes / 4;
+    let source = job.base + '.in';
+    let channels = 1;
+    if (settings != null) { // null = already processed (a take recorded through the module): only wrap it
+      if (!fs.existsSync(renderTool()) || !(await runRender(source, job.base + '.out', settings))) return { ok: false };
+      source = job.base + '.out';
+      channels = 2;
+    }
+    // 24-bit PCM WAV, written in pieces.
+    const out = fs.openSync(job.target, 'w');
+    const data = frames * channels * 3;
+    const head = Buffer.alloc(44);
+    head.write('RIFF', 0); head.writeUInt32LE(36 + data, 4); head.write('WAVEfmt ', 8); head.writeUInt32LE(16, 16);
+    head.writeUInt16LE(1, 20); head.writeUInt16LE(channels, 22); head.writeUInt32LE(48000, 24); head.writeUInt32LE(48000 * channels * 3, 28);
+    head.writeUInt16LE(channels * 3, 32); head.writeUInt16LE(24, 34); head.write('data', 36); head.writeUInt32LE(data, 40);
+    fs.writeSync(out, head);
+    const inp = fs.openSync(source, 'r');
+    const piece = Buffer.alloc(4 * 65536);
+    for (;;) {
+      const got = fs.readSync(inp, piece, 0, piece.length, null);
+      if (got <= 0) break;
+      const n = got >> 2;
+      const pcm = Buffer.alloc(n * 3);
+      for (let i = 0; i < n; i++) {
+        const v = Math.max(-8388608, Math.min(8388607, Math.round(piece.readFloatLE(i * 4) * 8388607)));
+        pcm.writeIntLE(v, i * 3, 3);
+      }
+      fs.writeSync(out, pcm);
+    }
+    fs.closeSync(inp);
+    fs.closeSync(out);
+    return { ok: true, seconds: frames / 48000, name: path.basename(job.target) };
+  } catch {
+    return { ok: false };
+  } finally {
+    clean();
+  }
+});
+
 /* ───── Preset files ───── */
 const presetFilter = [{ name: 'Пресет Aura', extensions: ['json'] }];
 ipcMain.handle('preset:export', async (_e, preset) => {
@@ -342,7 +448,7 @@ ipcMain.handle('preset:export', async (_e, preset) => {
   const safeName = String(preset.name || 'preset').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 40) || 'preset';
   const { canceled, filePath } = await dialog.showSaveDialog(win, { title: 'Сохранить пресет', defaultPath: `${safeName}.aura.json`, filters: presetFilter });
   if (canceled || !filePath) return false;
-  fs.writeFileSync(filePath, JSON.stringify({ app: 'aura', version: 1, name: String(preset.name || ''), v: preset.v }, null, 2));
+  fs.writeFileSync(filePath, JSON.stringify({ app: 'aura', version: 2, name: String(preset.name || ''), v: preset.v, eq: preset.eq && typeof preset.eq === 'object' ? preset.eq : {} }, null, 2));
   return true;
 });
 ipcMain.handle('preset:import', async () => {
@@ -352,7 +458,7 @@ ipcMain.handle('preset:import', async () => {
     if (fs.statSync(filePaths[0]).size > 20000) return { error: true };
     const data = JSON.parse(fs.readFileSync(filePaths[0], 'utf8'));
     if (data?.app !== 'aura' || !data.v || typeof data.v !== 'object') return { error: true };
-    return { name: String(data.name || ''), v: data.v };
+    return { name: String(data.name || ''), v: data.v, eq: data.eq && typeof data.eq === 'object' ? data.eq : {} };
   } catch {
     return { error: true };
   }

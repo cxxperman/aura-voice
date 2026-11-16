@@ -11,6 +11,8 @@ const PARAMS = [
   // Processing: everything about the voice that is not its frequency balance.
   { id: 'density', name: 'Плотность', short: 'Плотность', hint: 'Компрессор: тихое громче, громкое тише — ровный «дикторский» голос' },
   { id: 'excite', name: 'Блеск', short: 'Блеск', hint: 'Добавляет гармоники поверх голоса: звучит чётче и «дороже» даже в маленьких колонках' },
+  { id: 'multiband', name: 'Вещание', short: 'Вещание', hint: 'Сжимает низ, середину и верх по отдельности: бас не плавает от расстояния до микрофона, верх не режет' },
+  { id: 'sat', name: 'Сочность', short: 'Сочность', hint: 'Гармоники от баса: голос кажется гуще даже в телефоне и ноутбуке, где сам бас не слышен' },
   { id: 'deess', name: 'Мягкие «с» и «ш»', short: 'Свист', hint: 'Приглушает резкие свистящие' },
   { id: 'space', name: 'Комната', short: 'Комната', hint: 'Лёгкая реверберация вокруг голоса' },
   { id: 'width', name: 'Объём', short: 'Объём', hint: 'Ширина в стерео. В звонках не слышна: там микрофон сводят в моно' },
@@ -38,12 +40,12 @@ PARAMS.push(...FREQS);
 
 // A preset is a frequency curve (the eight bands, dB) plus processing. Bands left out are flat.
 const PRESETS = {
-  studio: { name: 'Студия', hue: 212, v: { density: 55, excite: 30, deess: 50, space: 12, width: 35, pitch: 0 }, eq: { f100: 3, f400: -2, f3200: 3, f11000: 4 } },
-  radio: { name: 'Радио', hue: 28, v: { density: 85, excite: 35, deess: 60, space: 5, width: 20, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f1600: 1, f3200: 4, f11000: 3 } },
-  velvet: { name: 'Бархат', hue: 278, v: { density: 60, excite: 15, deess: 70, space: 20, width: 45, pitch: 0 }, eq: { f100: 6, f200: 2, f400: -3, f3200: 1, f6000: -2, f11000: 2 } },
-  crystal: { name: 'Кристалл', hue: 176, v: { density: 45, excite: 45, deess: 65, space: 18, width: 50, pitch: 0 }, eq: { f100: 1, f400: -2, f3200: 4, f6000: 2, f11000: 7 } },
-  cinema: { name: 'Кино', hue: 348, v: { density: 70, excite: 25, deess: 55, space: 40, width: 70, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f800: -1, f3200: 3, f11000: 4 } },
-  whisper: { name: 'Шёпот', hue: 140, v: { density: 95, excite: 40, deess: 80, space: 10, width: 60, pitch: 0 }, eq: { f100: 2, f400: -1, f3200: 3, f6000: 3, f11000: 8 } },
+  studio: { name: 'Студия', hue: 212, v: { density: 55, multiband: 30, sat: 20, excite: 30, deess: 50, space: 12, width: 35, pitch: 0 }, eq: { f100: 3, f400: -2, f3200: 3, f11000: 4 } },
+  radio: { name: 'Радио', hue: 28, v: { density: 85, multiband: 70, sat: 45, excite: 35, deess: 60, space: 5, width: 20, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f1600: 1, f3200: 4, f11000: 3 } },
+  velvet: { name: 'Бархат', hue: 278, v: { density: 60, multiband: 40, sat: 50, excite: 15, deess: 70, space: 20, width: 45, pitch: 0 }, eq: { f100: 6, f200: 2, f400: -3, f3200: 1, f6000: -2, f11000: 2 } },
+  crystal: { name: 'Кристалл', hue: 176, v: { density: 45, multiband: 30, sat: 10, excite: 45, deess: 65, space: 18, width: 50, pitch: 0 }, eq: { f100: 1, f400: -2, f3200: 4, f6000: 2, f11000: 7 } },
+  cinema: { name: 'Кино', hue: 348, v: { density: 70, multiband: 50, sat: 40, excite: 25, deess: 55, space: 40, width: 70, pitch: 0 }, eq: { f100: 5, f200: 1, f400: -3, f800: -1, f3200: 3, f11000: 4 } },
+  whisper: { name: 'Шёпот', hue: 140, v: { density: 95, multiband: 40, sat: 20, excite: 40, deess: 80, space: 10, width: 60, pitch: 0 }, eq: { f100: 2, f400: -1, f3200: 3, f6000: 3, f11000: 8 } },
   custom: { name: 'Свой', hue: 44, v: null, eq: null }, // whatever the user last dialled in by hand
 };
 
@@ -89,6 +91,9 @@ const DEFAULTS = {
   micMeasured: null, // { hp, bands } built by auto-setup from the user's own voice
   eq: { ...PRESETS.studio.eq }, // frequency equalizer: band id → dB
   eqTab: 'freq', // which bank the equalizer shows: 'freq' or 'tone' (processing)
+  loud: 0, // output loudness to hold, LUFS; 0 = leave it
+  dehum: false, // notch out 50 Hz mains hum
+  voiceLevels: null, // third-octave spectrum of the user's own voice (dB), measured by auto-setup
   fx: 'none', // ready voice, see VOICES
   fxCustom: { pitch: 0, formant: 0, robot: 0, drive: 0, echo: 0, space: 0, trem: 0, phone: 0 },
   fxKeys: {}, // voice id → global hotkey
@@ -194,41 +199,42 @@ function eqBands() {
 const hzText = (f) => (f >= 1000 ? `${String(f / 1000).replace('.', ',')} кГц` : `${f} Гц`);
 const dbText = (g) => `${g > 0 ? '+' : '−'}${String(Math.abs(g)).replace('.', ',')} дБ`;
 
+// Everything the module (or the file renderer, which is the same chain) needs to know.
+function systemLines(enabled, live = true) {
+  const v = state.v;
+  return [
+    `enabled=${enabled ? 1 : 0}`,
+    'warmth=0', 'clarity=0', 'air=0', // the tone is in the frequency bands (m…) now
+    ...['density', 'multiband', 'sat', 'excite', 'deess', 'space', 'width', 'pitch'].map((k) => `${k}=${v[k] ?? 0}`),
+    `auto=${state.auto ? 1 : 0}`,
+    `clean=${state.g.clean}`,
+    `ns=${state.g.ns}`,
+    `nsengine=${state.nsEngine}`,
+    ...(live ? [`playid=${state.playId}`, `playstop=${state.playStop}`, `clipgain=${state.clipGain}`, `mute=${state.mute ? 1 : 0}`] : []),
+    `pop=${state.g.pop}`,
+    `dereverb=${state.g.dereverb}`,
+    `loud=${state.loud || 0}`,
+    `dehum=${state.dehum ? 1 : 0}`,
+    ...Object.entries(fxValues()).map(([k, value]) => `${k}=${value}`),
+    `ingain=${state.inGain}`,
+    `outgain=${state.outGain}`,
+    `michp=${eqBands().hp}`,
+    ...Array.from({ length: 14 }, (_, i) => eqBands().bands[i] || [0, 0, 0]).flatMap(([f, g, q], i) => {
+      const k = '123456789abcde'[i];
+      return [`m${k}f=${f}`, `m${k}g=${g}`, `m${k}q=${q}`];
+    }),
+  ].join('\r\n') + '\r\n';
+}
 function pushSystem() {
   if (!sys.installed || TEST) return;
   // Off, "hold to compare" and sample recording all want the untouched microphone.
-  const enabled = state.on && !holdingOriginal && !recording;
-  const v = state.v;
-  window.auraSystem.write(
-    [
-      `enabled=${enabled ? 1 : 0}`,
-      'warmth=0', 'clarity=0', 'air=0', // the tone is in the frequency bands (m…) now
-      ...['density', 'excite', 'deess', 'space', 'width', 'pitch'].map((k) => `${k}=${v[k] ?? 0}`),
-      `auto=${state.auto ? 1 : 0}`,
-      `clean=${state.g.clean}`, // after the preset values: the last one wins
-      `ns=${state.g.ns}`,
-      `nsengine=${state.nsEngine}`,
-      `playid=${state.playId}`,
-      `playstop=${state.playStop}`,
-      `clipgain=${state.clipGain}`,
-      `pop=${state.g.pop}`,
-      `dereverb=${state.g.dereverb}`,
-      `mute=${state.mute ? 1 : 0}`,
-      ...Object.entries(fxValues()).map(([k, value]) => `${k}=${value}`),
-      `ingain=${state.inGain}`,
-      `outgain=${state.outGain}`,
-      `michp=${eqBands().hp}`,
-      ...Array.from({ length: 14 }, (_, i) => eqBands().bands[i] || [0, 0, 0]).flatMap(([f, g, q], i) => {
-        const k = '123456789abcde'[i];
-        return [`m${k}f=${f}`, `m${k}g=${g}`, `m${k}q=${q}`];
-      }),
-    ].join('\r\n') + '\r\n'
-  );
+  window.auraSystem.write(systemLines(state.on && !holdingOriginal && !recording));
 }
 
 function applyAll() {
   engine.apply(state, false, fxValues()); // the in-app chain mirrors the effects, so «Проба» lets you hear them
   pushSystem();
+  queueSampleRender();
 }
 
 // In system mode the live path must pass the microphone through untouched (it is already processed);
@@ -789,10 +795,12 @@ const holdCompare = (on) => {
   if (on) {
     // The processing lives in the microphone: switch it off there for as long as the button is held.
     if (sys.installed && !engine.sampleMode) holdingOriginal = true;
+    else if (sampleRaw) engine.playBuffer(sampleRaw.buffer);
     else engine.setBypass(true);
   } else {
     // Undo both ways of bypassing, whichever one the press used: the mode may have changed meanwhile.
     holdingOriginal = false;
+    if (sampleRaw && engine.sampleMode && sampleRendered) engine.playBuffer(sampleRendered);
     if (sys.installed) syncBypass();
     else engine.setBypass(false);
   }
@@ -809,7 +817,45 @@ compareBtn.addEventListener('keyup', () => holdCompare(false));
 compareBtn.addEventListener('blur', () => holdCompare(false));
 addEventListener('blur', () => holdCompare(false)); // Alt+Tab while holding
 
-/* ───────── Sample loop ───────── */
+/* ───────── Sample loop ─────────
+ * With the module installed, the recorded sample is rendered by the module's own chain (the
+ * AuraRender tool) on every change, so what loops is exactly what goes on air — denoiser,
+ * broadcast compressor and all. Without the tool, the in-app chain plays it instead. */
+let sampleRaw = null; // { mono: Float32Array, buffer: AudioBuffer }
+let sampleRendered = null;
+let sampleTimer = 0;
+let sampleBusy = false;
+let sampleAgain = false;
+const toBuffer = (interleaved, channels) => {
+  const frames = interleaved.length / channels;
+  const buf = engine.ctx.createBuffer(2, frames, 48000);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    const from = Math.min(c, channels - 1);
+    for (let i = 0; i < frames; i++) d[i] = interleaved[i * channels + from];
+  }
+  return buf;
+};
+async function renderSampleNow() {
+  if (!sampleRaw || !engine.sampleMode) return;
+  if (sampleBusy) return (sampleAgain = true);
+  sampleBusy = true;
+  const out = await window.auraSystem.renderSample(sampleRaw.mono.slice().buffer, systemLines(true, false));
+  sampleBusy = false;
+  if (out && sampleRaw && engine.sampleMode) {
+    sampleRendered = toBuffer(new Float32Array(out), 2);
+    if (!held) engine.playBuffer(sampleRendered);
+  }
+  if (sampleAgain) {
+    sampleAgain = false;
+    renderSampleNow();
+  }
+}
+function queueSampleRender() {
+  if (!sampleRaw || !engine.sampleMode) return;
+  clearTimeout(sampleTimer);
+  sampleTimer = setTimeout(renderSampleNow, 90);
+}
 const sampleBtn = $('#sample');
 function renderSample() {
   sampleBtn.classList.toggle('live', engine.sampleMode || recording);
@@ -819,6 +865,7 @@ sampleBtn.addEventListener('click', async () => {
   if (recording || !engine.running) return;
   if (engine.sampleMode) {
     engine.stopSample();
+    sampleRaw = sampleRendered = null;
   } else {
     recording = true;
     renderSample();
@@ -830,7 +877,20 @@ sampleBtn.addEventListener('click', async () => {
     setStatus('Говорите — идёт запись');
     try {
       await engine.recordSample(6, (s) => (sampleBtn.textContent = `Запись… ${s}`));
-      engine.playSample();
+      sampleRaw = sampleRendered = null;
+      if (sys.installed && (await window.auraSystem.renderAvailable())) {
+        const b = engine.sampleBuf;
+        const mono = new Float32Array(b.length);
+        for (let c = 0; c < b.numberOfChannels; c++) {
+          const d = b.getChannelData(c);
+          for (let i = 0; i < mono.length; i++) mono[i] += d[i] / b.numberOfChannels;
+        }
+        sampleRaw = { mono, buffer: toBuffer(mono, 1) };
+        engine.playBuffer(sampleRaw.buffer); // the raw take for the moment the first render takes
+        renderSampleNow();
+      } else {
+        engine.playSample();
+      }
     } catch (err) {
       console.error('sample failed:', err?.message);
     }
@@ -1620,6 +1680,7 @@ function showTab(name) {
   } catch {}
   if (name === 'setup') loadCaptureDevices();
   if (name === 'effects') renderVoices();
+  if (name === 'voice') queueEq();
   if (name === 'sounds' && !catalog.started) {
     catalog.started = true; // nothing is fetched until the user actually opens the page
     loadCatalog(true);
@@ -1739,7 +1800,7 @@ function measuredEq(speech, noise) {
     const gain = Math.round(clamp(-0.6 * off, -r.max, r.max) * 2) / 2;
     if (Math.abs(gain) >= 1) bands.push([r.f, gain, r.q]);
   }
-  return { hp: 80, bands };
+  return { hp: 80, bands, levels: THIRDS.map((_, k) => (Number.isFinite(diff[k]) ? Math.round((diff[k] + SPEECH[k]) * 10) / 10 : null)) };
 }
 
 /* ───────── Auto-setup ─────────
@@ -1798,6 +1859,8 @@ tuneBtn.addEventListener('click', async () => {
   gainInput.value = gain;
   gainInput.dispatchEvent(new Event('input')); // updates the label, applies and saves
   if (eq) {
+    state.voiceLevels = eq.levels;
+    delete eq.levels;
     state.micMeasured = eq;
     state.mic = 'measured';
     renderMic();
@@ -1807,6 +1870,278 @@ tuneBtn.addEventListener('click', async () => {
   save();
   renderGuide();
   flash(`Настроено: фон ${Math.round(noise)} дБ, голос ${Math.round(speech)} дБ${eq ? ', эквалайзер микрофона подстроен под ваш голос' : ''}`, false, 7000);
+});
+
+/* ───────── Live spectrum behind the frequency bands ─────────
+ * What is leaving the microphone right now, drawn on the same frequency axis as the handles
+ * (they sit an octave apart, so the axis between them is logarithmic). */
+const specCanvas = document.createElement('canvas');
+specCanvas.className = 'eq-spectrum';
+specCanvas.setAttribute('aria-hidden', 'true');
+eqBody.prepend(specCanvas);
+const specCtx = specCanvas.getContext('2d');
+const SPEC_POINTS = 56;
+const specLevel = new Float32Array(SPEC_POINTS).fill(-100);
+let specAn = null;
+let specBins = null;
+let specLast = 0;
+function drawSpectrum(now) {
+  const bank = eqBanks[1];
+  if (now - specLast < 45 || bank.el.hidden || !slidersEl.offsetParent) return;
+  specLast = now;
+  const box = eqBody.getBoundingClientRect();
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  if (specCanvas.width !== Math.round(box.width * dpr) || specCanvas.height !== Math.round(box.height * dpr)) {
+    specCanvas.width = Math.round(box.width * dpr);
+    specCanvas.height = Math.round(box.height * dpr);
+  }
+  specCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  specCtx.clearRect(0, 0, box.width, box.height);
+  if (!engine.running || !engine.n) return specLevel.fill(-100);
+  if (!specAn || specAn.context !== engine.ctx) {
+    specAn = engine.ctx.createAnalyser();
+    specAn.fftSize = 4096;
+    specAn.smoothingTimeConstant = 0.6;
+    engine.n.post.connect(specAn);
+    specBins = new Float32Array(specAn.frequencyBinCount);
+  }
+  specAn.getFloatFrequencyData(specBins);
+  // Where each band's handle sits; frequencies between and beyond are placed on a log scale.
+  const marks = bank.inputs.map((input, i) => {
+    const r = input.parentElement.getBoundingClientRect();
+    return { f: FREQS[i].f, x: r.left + r.width / 2 - box.left, top: r.top - box.top + 8, bottom: r.bottom - box.top - 8 };
+  });
+  if (!marks.length || !marks[0].bottom) return;
+  const xOf = (f) => {
+    let i = 0;
+    while (i < marks.length - 2 && f > marks[i + 1].f) i++;
+    const a = marks[i], b = marks[i + 1];
+    return a.x + ((Math.log(f) - Math.log(a.f)) / (Math.log(b.f) - Math.log(a.f))) * (b.x - a.x);
+  };
+  const edge = bank.el.getBoundingClientRect();
+  const left = edge.left - box.left, right = edge.right - box.left;
+  const top = marks[0].top, bottom = marks[0].bottom;
+  const hz = engine.ctx.sampleRate / specAn.fftSize;
+  specCtx.beginPath();
+  specCtx.moveTo(left, bottom);
+  for (let k = 0; k < SPEC_POINTS; k++) {
+    const f = 60 * Math.pow(16000 / 60, k / (SPEC_POINTS - 1));
+    let peak = -140;
+    for (let i = Math.max(1, Math.floor((f / 1.07) / hz)); i <= Math.ceil((f * 1.07) / hz) && i < specBins.length; i++) if (specBins[i] > peak) peak = specBins[i];
+    peak += 3 * Math.log2(f / 1000); // +3 dB per octave: speech falls away towards the top, this keeps the picture level
+    specLevel[k] = peak > specLevel[k] ? peak : specLevel[k] + (peak - specLevel[k]) * 0.25;
+    const y = bottom - clamp((specLevel[k] + 95) / 65, 0, 1) * (bottom - top);
+    specCtx.lineTo(clamp(xOf(f), left, right), y);
+  }
+  specCtx.lineTo(right, bottom);
+  specCtx.closePath();
+  specCtx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+  specCtx.fill();
+  specCtx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+  specCtx.lineWidth = 1;
+  specCtx.stroke();
+}
+
+/* ───────── Decoding files ───────── */
+// Any audio or video the browser can decode → mono float32 at 48 kHz.
+async function decodeMono(file, maxSeconds = Infinity) {
+  const probe = new OfflineAudioContext(1, 1, 48000);
+  const decoded = await probe.decodeAudioData(await file.arrayBuffer());
+  const seconds = Math.min(decoded.duration, maxSeconds);
+  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(seconds * 48000)), 48000);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  return (await off.startRendering()).getChannelData(0);
+}
+const pickFile = (accept) =>
+  new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.addEventListener('change', () => resolve(input.files[0] || null));
+    input.addEventListener('cancel', () => resolve(null));
+    input.click();
+  });
+
+/* ───────── «Как у образца» ─────────
+ * Takes the frequency balance of a recording you like and moves your bands towards it. Needs the
+ * spectrum of your own voice, which auto-setup measures. Only the balance is matched — not the
+ * other person's microphone, room or compression. */
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { const t = re[i]; re[i] = re[j]; re[j] = t; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (-2 * Math.PI) / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2;
+        const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+// Third-octave levels (dB) of the louder half of a recording: the pauses say nothing about a voice.
+function thirdOctaves(mono) {
+  const N = 4096, re = new Float32Array(N), im = new Float32Array(N);
+  const frames = [];
+  for (let at = 0; at + N <= mono.length; at += N) {
+    let e = 0;
+    for (let i = 0; i < N; i++) e += mono[at + i] * mono[at + i];
+    frames.push([at, e]);
+  }
+  if (frames.length < 8) return null;
+  const median = frames.map((f) => f[1]).sort((a, b) => a - b)[frames.length >> 1];
+  const sum = new Float64Array(N / 2);
+  let used = 0;
+  for (const [at, e] of frames) {
+    if (e < median || e <= 0) continue;
+    for (let i = 0; i < N; i++) { re[i] = mono[at + i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N)); im[i] = 0; }
+    fft(re, im);
+    for (let i = 0; i < N / 2; i++) sum[i] += re[i] * re[i] + im[i] * im[i];
+    used++;
+  }
+  const hz = 48000 / N;
+  return THIRDS.map((f) => {
+    let p = 0;
+    for (let i = Math.ceil((f / 1.122) / hz); i < (f * 1.122) / hz && i < sum.length; i++) p += sum[i];
+    return p > 0 ? 10 * Math.log10(p / used) : null;
+  });
+}
+// How far a band of the microphone profile moves a frequency, dB (close enough for this purpose).
+const bandGainAt = (f, [f0, g, q]) => (q > 0 ? g / (1 + Math.pow((f / f0 - f0 / f) * q, 2)) : f0 < 1000 ? g / (1 + Math.pow(f / f0, 2)) : g / (1 + Math.pow(f0 / f, 2)));
+$('#matchRef').addEventListener('click', async () => {
+  if (!state.voiceLevels) return flash('Сначала нажмите «Автонастройка»: мне нужен спектр вашего голоса', true, 6000);
+  const file = await pickFile('audio/*,video/*');
+  if (!file) return;
+  setStatus('Слушаю образец…');
+  let ref = null;
+  try {
+    ref = thirdOctaves(await decodeMono(file, 240));
+  } catch {}
+  if (!ref) return flash('Не получилось прочитать этот файл. Подойдут mp3, wav, m4a, ogg, mp4, webm', true, 6000);
+  const shape = (levels, lo, hi) => {
+    const xs = levels.filter((v, k) => v != null && THIRDS[k] >= lo && THIRDS[k] <= hi);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  };
+  const refMid = shape(ref, 200, 4000), ownMid = shape(state.voiceLevels, 200, 4000);
+  if (refMid == null || ownMid == null) return flash('В образце слишком мало голоса', true);
+  const mic = micEq();
+  const eq = {};
+  for (const p of FREQS) {
+    const lo = p.q ? p.f / 1.3 : p.f < 1000 ? 90 : 8000, hi = p.q ? p.f * 1.3 : p.f < 1000 ? 135 : 12500;
+    const r = shape(ref, lo, hi), o = shape(state.voiceLevels, lo, hi);
+    if (r == null || o == null) continue;
+    const profile = mic.bands.reduce((a, b) => a + bandGainAt(p.f, b), 0); // already applied ahead of the bands
+    const gain = Math.round(clamp(0.8 * (r - refMid - (o - ownMid) - profile), -9, 9));
+    if (gain) eq[p.id] = gain;
+  }
+  state.eq = eq;
+  state.custom = { v: { ...state.v }, eq: { ...eq } };
+  state.preset = 'custom';
+  renderPreset();
+  reportToTray();
+  renderSliders(true);
+  showEqTab('freq');
+  applyAll();
+  save();
+  flash('Частоты подогнаны под образец — пресет «Свой»', false, 6000);
+});
+
+/* ───────── Recordings: files and takes ───────── */
+const filesNote = $('#filesNote');
+async function sendMono(token, mono) {
+  const step = 48000 * 30;
+  for (let at = 0; at < mono.length; at += step) {
+    if (!(await window.auraSystem.renderChunk(token, mono.slice(at, at + step).buffer))) return false;
+  }
+  return true;
+}
+let fileBusy = false;
+async function processFile(file) {
+  if (fileBusy || !file) return;
+  if (!(await window.auraSystem.renderAvailable())) return (filesNote.textContent = 'Обработчик файлов не найден — переустановите Aura.');
+  fileBusy = true;
+  filesNote.className = 'footnote';
+  try {
+    filesNote.textContent = `Читаю «${file.name}»…`;
+    const mono = await decodeMono(file);
+    const token = await window.auraSystem.renderBegin(file.name);
+    if (!token) return (filesNote.textContent = '');
+    filesNote.textContent = `Обрабатываю ${Math.round(mono.length / 48000)} с звука тем же звуком, что в эфире…`;
+    const res = (await sendMono(token, mono)) ? await window.auraSystem.renderFinish(token, systemLines(true, false)) : { ok: false };
+    filesNote.textContent = res.ok ? `Готово: «${res.name}», ${Math.round(res.seconds)} с.` : 'Не получилось обработать этот файл.';
+    if (!res.ok) filesNote.className = 'footnote warn';
+  } catch {
+    filesNote.textContent = 'Не получилось прочитать этот файл. Подойдут mp3, wav, m4a, ogg, flac, mp4, webm.';
+    filesNote.className = 'footnote warn';
+  } finally {
+    fileBusy = false;
+  }
+}
+const drop = $('#fileDrop');
+$('#filePick').addEventListener('click', async () => processFile(await pickFile('audio/*,video/*')));
+for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); });
+for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); });
+drop.addEventListener('drop', (e) => processFile(e.dataTransfer?.files?.[0]));
+addEventListener('dragover', (e) => e.preventDefault()); // a file dropped beside the zone must not navigate the window away
+addEventListener('drop', (e) => e.preventDefault());
+
+// A take: what the microphone gives right now. With the module installed that is already the
+// processed voice; without it, the take goes through the renderer like any other file.
+const takeBtn = $('#takeBtn');
+let take = null;
+takeBtn.addEventListener('click', async () => {
+  if (take) return take.rec.stop();
+  if (!engine.running || !engine.stream) return (filesNote.textContent = 'Сначала включите сферу: дубль пишется с включённого микрофона.');
+  const rec = new MediaRecorder(engine.stream);
+  const chunks = [];
+  const started = performance.now();
+  take = { rec, timer: setInterval(() => (takeBtn.textContent = `Остановить · ${Math.floor((performance.now() - started) / 1000)} с`), 250) };
+  takeBtn.classList.add('live');
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  rec.onstop = async () => {
+    clearInterval(take.timer);
+    take = null;
+    takeBtn.classList.remove('live');
+    takeBtn.textContent = 'Записать дубль';
+    try {
+      const mono = await decodeMono(new Blob(chunks, { type: rec.mimeType }));
+      const token = await window.auraSystem.renderBegin('Дубль');
+      if (!token) return;
+      const res = (await sendMono(token, mono)) ? await window.auraSystem.renderFinish(token, sys.installed ? null : systemLines(true, false)) : { ok: false };
+      filesNote.className = res.ok ? 'footnote' : 'footnote warn';
+      filesNote.textContent = res.ok ? `Дубль сохранён: «${res.name}», ${Math.round(res.seconds)} с.` : 'Не получилось сохранить дубль.';
+    } catch {
+      filesNote.className = 'footnote warn';
+      filesNote.textContent = 'Не получилось сохранить дубль.';
+    }
+  };
+  rec.start();
+});
+
+/* ───────── Output loudness and hum ───────── */
+const loudSelect = $('#loudTarget');
+loudSelect.value = String(state.loud || 0);
+loudSelect.addEventListener('change', () => {
+  state.loud = Number(loudSelect.value) || 0;
+  applyAll();
+  save();
+});
+$('#dehum').checked = !!state.dehum;
+$('#dehum').addEventListener('change', (e) => {
+  state.dehum = e.target.checked;
+  applyAll();
+  save();
 });
 
 /* ───────── Orb + meters ───────── */
@@ -1857,6 +2192,7 @@ function frame(now) {
   const k = clamp((now - lastFrame) / 16.667, 0.25, 3); // 1 at 60 Hz: motion keeps its speed if frames are late
   lastFrame = now;
   const ease = (a) => 1 - Math.pow(1 - a, k);
+  drawSpectrum(now);
   const m = engine.meters();
   const target = m ? clamp((m.out + 55) / 45, 0, 1) : 0;
   level += (target - level) * ease(target > level ? 0.35 : 0.1);

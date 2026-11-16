@@ -540,6 +540,30 @@ class Engine {
     s.loop = true;
     s.connect(this.n.inGain);
     s.start();
+    this._sampleT0 = this.ctx.currentTime;
+    this.sampleSrc = s;
+    this._route();
+  }
+
+  // A buffer that is already processed (rendered by the module's own chain): straight to the
+  // output, keeping the place in the loop when it replaces another one.
+  playBuffer(buf) {
+    if (!this.n) return;
+    let offset = 0;
+    if (this.sampleSrc) {
+      offset = (this.ctx.currentTime - (this._sampleT0 || 0)) % this.sampleSrc.buffer.duration;
+      this.sampleSrc.stop();
+      this.sampleSrc.disconnect();
+    } else {
+      this.micSrc?.disconnect();
+    }
+    const s = this.ctx.createBufferSource();
+    s.buffer = buf;
+    s.loop = true;
+    s.connect(this.n.post);
+    offset %= buf.duration;
+    s.start(0, offset);
+    this._sampleT0 = this.ctx.currentTime - offset;
     this.sampleSrc = s;
     this._route();
   }

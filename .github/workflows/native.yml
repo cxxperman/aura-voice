@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p native/bin
-          cp native/build/Release/AuraAPO.dll native/build/Release/AuraSetup.exe native/build/RNNoise-LICENSE.txt native/bin/
+          cp native/build/Release/AuraAPO.dll native/build/Release/AuraSetup.exe native/build/Release/AuraRender.exe native/build/RNNoise-LICENSE.txt native/bin/
           cp third_party/dfn/models/DeepFilterNet3_onnx.tar.gz native/bin/
           cp third_party/dfn/LICENSE-MIT native/bin/DeepFilterNet-LICENSE.txt
       - uses: actions/upload-artifact@v4

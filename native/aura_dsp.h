@@ -33,6 +33,10 @@ struct Params {
   float outGainDb = 0.0f;
   float pop = 0.50f; // de-plosive: tames "p"/"b" blasts
   float pitch = 0.0f; // semitones, -12..+12; 0 = untouched
+  float multiband = 0;    // 0..1 "broadcast": three-band compression — steady lows, tamed top
+  float satLow = 0;       // 0..1 harmonics generated from the low end: the voice sounds fuller on small speakers
+  float dehum = 0;        // 1 = notch out mains hum (50 Hz and its first harmonics)
+  float loudTarget = 0;   // output loudness to hold, LUFS (e.g. -16); 0 = off
   float excite = -1.0f; // harmonics on top of the voice, 0..1; below zero = follow clarity and air (older windows)
 
   // Voice effects — the "ready voices" (robot, cave, walkie-talkie…). All neutral at zero.
@@ -63,6 +67,7 @@ struct Params {
 };
 
 inline float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
+inline float dbToGainFast(float db) { return std::exp(db * 0.115129255f); }
 inline float onePole(float seconds, float sr) { return 1.0f - std::exp(-1.0f / (seconds * sr)); }
 
 // RBJ cookbook biquad, transposed direct form II.
@@ -102,6 +107,10 @@ struct Biquad {
     const float k = 2 * std::sqrt(A) * (std::sin(w) / 2 * std::sqrt(2.0f));
     set(A * ((A + 1) - (A - 1) * cs + k), 2 * A * ((A - 1) - (A + 1) * cs), A * ((A + 1) - (A - 1) * cs - k),
         (A + 1) + (A - 1) * cs + k, -2 * ((A - 1) + (A + 1) * cs), (A + 1) + (A - 1) * cs - k);
+  }
+  void notch(float sr, float f, float q) {
+    const float w = omega(sr, f), cs = std::cos(w), al = std::sin(w) / (2 * q);
+    set(1, -2 * cs, 1, 1 + al, -2 * cs, 1 - al);
   }
   void highshelf(float sr, float f, float gainDb) {
     const float A = std::pow(10.0f, gainDb / 40.0f);
@@ -510,6 +519,24 @@ class Chain {
     hpf_.highpass(sr_, 85, 0.707f);
     exIn_.highpass(sr_, 3000, 0.707f);
     exOut_.highpass(sr_, 3000, 0.707f);
+    for (int i = 0; i < 3; i++) { hum_[i] = Biquad(); hum_[i].notch(sr_, 50.0f * float(i + 1), 18.0f); }
+    // Three bands, split by 4th-order Linkwitz-Riley crossovers (two Butterworth sections each).
+    for (int i = 0; i < 2; i++) {
+      xLoLp_[i] = Biquad(); xLoLp_[i].lowpass(sr_, 200, 0.707f);
+      xLoHp_[i] = Biquad(); xLoHp_[i].highpass(sr_, 200, 0.707f);
+      xHiLp_[i] = Biquad(); xHiLp_[i].lowpass(sr_, 4000, 0.707f);
+      xHiHp_[i] = Biquad(); xHiHp_[i].highpass(sr_, 4000, 0.707f);
+      kShelf_[i] = Biquad(); kShelf_[i].highshelf(sr_, 1682.0f, 4.0f); // K-weighting, as loudness meters hear
+      kHigh_[i] = Biquad(); kHigh_[i].highpass(sr_, 38.0f, 0.5f);
+    }
+    satLp_ = Biquad(); satLp_.lowpass(sr_, 220, 0.707f);
+    satHp_ = Biquad(); satHp_.highpass(sr_, 140, 0.707f);
+    satTop_ = Biquad(); satTop_.lowpass(sr_, 900, 0.707f);
+    const float attack[3] = {0.008f, 0.004f, 0.001f}, release[3] = {0.16f, 0.12f, 0.07f};
+    for (int b = 0; b < 3; b++) { mbAtt_[b] = onePole(attack[b], sr_); mbRel_[b] = onePole(release[b], sr_); mbEnv_[b] = 0; mbG_[b] = 1; }
+    mbAmt_ = satAmt_ = 0;
+    loudMs_[0] = loudMs_[1] = 0; loudG_ = 1;
+    loudCoef_ = onePole(0.4f, sr_);
     revHp_.highpass(sr_, 280, 0.707f);
     revLp_.lowpass(sr_, 6500, 0.707f);
     dyn_ = Dynamics();
@@ -575,6 +602,7 @@ class Chain {
   }
 
   float gainReductionDb() const { return compDb_; }
+  int latency() const { return useNatural_ ? natural_.latency() : 0; } // samples; everything else in the chain is immediate
 
   // `in` may alias `outL` (in-place).
   void process(const float* in, float* outL, float* outR, int frames) {
@@ -596,9 +624,37 @@ class Chain {
       float x = in[n] * inG_;
       if (useNatural_) x = natural_.process(x, pitchRatio_, formantRatio_);
       x = hpf_.process(x);
+      if (params_.dehum > 0.5f) x = hum_[2].process(hum_[1].process(hum_[0].process(x)));
       for (int i = 0; i < Params::kMicBands; i++) if (micOn_[i]) x = mic_[i].process(x);
       x = dyn_.process(x, gateThr_, deess, autoLevel, params_.pop);
       x = air_.process(pres_.process(low_.process(mud_.process(x))));
+
+      // "Broadcast": compress the lows, the middle and the top on their own, so the bass does not
+      // swell and fade with the distance to the microphone and the top does not spit.
+      mbAmt_ += (params_.multiband - mbAmt_) * smooth_;
+      if (mbAmt_ > 0.002f) {
+        const float lo = xLoLp_[1].process(xLoLp_[0].process(x));
+        const float rest = xLoHp_[1].process(xLoHp_[0].process(x));
+        const float band[3] = {lo, xHiLp_[1].process(xHiLp_[0].process(rest)), xHiHp_[1].process(xHiHp_[0].process(rest))};
+        static const float thr[3] = {0.045f, 0.09f, 0.025f}, slope[3] = {0.62f, 0.3f, 0.6f}, lift[3] = {3.0f, 1.0f, 1.5f};
+        float sum = 0;
+        for (int b = 0; b < 3; b++) {
+          const float a = std::fabs(band[b]);
+          mbEnv_[b] += (a - mbEnv_[b]) * (a > mbEnv_[b] ? mbAtt_[b] : mbRel_[b]);
+          // gain = (threshold / level) ^ slope above the threshold, then part of it given back
+          const float want = (mbEnv_[b] > thr[b] ? std::pow(thr[b] / mbEnv_[b], slope[b] * mbAmt_) : 1.0f) * dbToGainFast(lift[b] * mbAmt_);
+          mbG_[b] += (want - mbG_[b]) * 0.01f;
+          sum += band[b] * mbG_[b];
+        }
+        x = sum;
+      }
+      // Low-end harmonics: the bass itself is inaudible on phones and laptops, its overtones are not.
+      satAmt_ += (params_.satLow - satAmt_) * smooth_;
+      if (satAmt_ > 0.002f) {
+        const float lo = satLp_.process(x);
+        const float shaped = (std::tanh(6.0f * lo + 0.3f) - 0.29131f) / (6.0f * 0.91514f); // biased: even and odd harmonics; unity slope at rest
+        x += satTop_.process(satHp_.process(shaped - lo)) * satAmt_ * 1.8f;
+      }
 
       // Soft-knee feed-forward compressor, no look-ahead (adds no latency).
       const float over = 20.0f * std::log10(std::fabs(x) + 1e-9f) - thrDb_;
@@ -628,6 +684,26 @@ class Chain {
       float l = t + side + rl * revG_;
       float r = t - side + rr * revG_;
 
+      // Hold a loudness target (LUFS). Measured the way loudness meters do, only while there is
+      // voice; moved slowly, faster when far off; within +-12 dB. The limiter below catches the peaks.
+      if (params_.loudTarget < -1.0f) {
+        const float kl = kHigh_[0].process(kShelf_[0].process(l)), kr = kHigh_[1].process(kShelf_[1].process(r));
+        if (dyn_.open && std::fabs(t) > 0.003f) {
+          loudMs_[0] += (kl * kl - loudMs_[0]) * loudCoef_;
+          loudMs_[1] += (kr * kr - loudMs_[1]) * loudCoef_;
+          const float now = -0.691f + 10.0f * std::log10(loudMs_[0] + loudMs_[1] + 1e-10f);
+          const float want = dbToGain(std::clamp(params_.loudTarget - now, -12.0f, 12.0f));
+          const float far = std::fabs(want / loudG_ - 1.0f);
+          loudG_ += (want - loudG_) * (far > 0.6f ? 6.0f : 1.0f) / (2.0f * sr_);
+        }
+        l *= loudG_;
+        r *= loudG_;
+      } else {
+        loudG_ += (1.0f - loudG_) * smooth_;
+        l *= loudG_;
+        r *= loudG_;
+      }
+
       // Stereo-linked limiter: instant attack, 60 ms release.
       const float peak = std::max(std::fabs(l), std::fabs(r));
       const float want = peak > ceiling ? ceiling / peak : 1.0f;
@@ -652,6 +728,9 @@ class Chain {
   bool hasParams_ = false;
   Biquad hpf_, mud_, low_, pres_, air_, exIn_, exOut_, revHp_, revLp_;
   Biquad mic_[Params::kMicBands];
+  Biquad hum_[3], xLoLp_[2], xLoHp_[2], xHiLp_[2], xHiHp_[2], kShelf_[2], kHigh_[2], satLp_, satHp_, satTop_;
+  float mbEnv_[3] = {}, mbG_[3] = {1, 1, 1}, mbAtt_[3] = {}, mbRel_[3] = {}, mbAmt_ = 0, satAmt_ = 0;
+  float loudMs_[2] = {}, loudG_ = 1, loudCoef_ = 0;
   bool micOn_[Params::kMicBands] = {};
   Dynamics dyn_;
   Room room_;

@@ -387,6 +387,7 @@ static void runEffects() {
     {"megaphone", with([](aura::Params& p) { p.fxPhone = 1; p.fxDrive = 0.8f; p.fxEchoMs = 90; p.fxEchoFb = 0.2f; p.fxEchoMix = 0.25f; })},
     {"cave", with([](aura::Params& p) { p.fxEchoMs = 260; p.fxEchoFb = 0.5f; p.fxEchoMix = 0.45f; p.fxSpace = 0.8f; })},
     {"underwater", with([](aura::Params& p) { p.fxLowpassHz = 600; p.fxTremHz = 5; p.fxTremDepth = 0.5f; })},
+    {"broadcast", with([](aura::Params& p) { p.multiband = 1; p.satLow = 1; p.dehum = 1; p.loudTarget = -16; })},
     {"another person", with([](aura::Params& p) { p.fxPitch = 5; p.fxNatural = 1; p.fxFormant = 1.5f; })},
     {"everything", with([](aura::Params& p) { p.fxNatural = 1; p.fxFormant = 5; p.fxPitch = -12; p.fxRingHz = 2000; p.fxRingMix = 1; p.fxEchoMs = 600; p.fxEchoFb = 0.85f; p.fxEchoMix = 1; p.fxPhone = 1; p.fxDrive = 1; p.fxTremHz = 30; p.fxTremDepth = 1; p.fxLowpassHz = 8000; p.fxSpace = 1; })},
   };
@@ -470,6 +471,34 @@ static void runEffects() {
   const float tilt = toneDb(100, flat) - toneDb(1000, flat), top = toneDb(8000, flat) - toneDb(1000, flat);
   std::printf("neutral chain: 100 Hz %+.1f dB, 8 kHz %+.1f dB relative to 1 kHz\n", tilt, top);
   CHECK(std::fabs(top) < 1.0f && tilt > -4.0f && tilt < 1.0f, "the chain is not flat with every band at zero (100 Hz %.1f dB, 8 kHz %.1f dB)", tilt, top);
+  // Mains hum: gone when asked, untouched otherwise.
+  aura::Params quietHum = flat;
+  quietHum.dehum = 1;
+  const float hum = toneDb(50, quietHum) - toneDb(50, flat), near = toneDb(300, quietHum) - toneDb(300, flat);
+  std::printf("hum filter: 50 Hz %+.1f dB, 300 Hz %+.1f dB\n", hum, near);
+  CHECK(hum < -15.0f, "the hum filter took only %.1f dB off 50 Hz", hum);
+  CHECK(std::fabs(near) < 1.0f, "the hum filter moved 300 Hz by %.1f dB", near);
+
+  // Loudness target: a quiet and a loud take of the same voice must come out close to each other.
+  auto leveled = [&](float scale, float target) {
+    std::vector<float> x(in.size()), l(in.size()), r(in.size());
+    for (size_t i = 0; i < x.size(); i++) x[i] = in[i] * scale;
+    aura::Params p = base;
+    p.autoLevel = 0;
+    p.density = 0; // or the compressor would do the levelling
+    p.loudTarget = target;
+    aura::Chain chain;
+    chain.prepare(48000);
+    chain.setParams(p);
+    for (int pass = 0; pass < 3; pass++) // heard a few times over, as a long recording would be
+      for (size_t at = 0; at < x.size(); at += 480) chain.process(x.data() + at, l.data() + at, r.data() + at, int(std::min<size_t>(480, x.size() - at)));
+    return rmsDb(l, a, b);
+  };
+  const float quietTake = leveled(0.35f, -16), loudTake = leveled(1.8f, -16), unleveled = leveled(0.35f, 0) - leveled(1.8f, 0);
+  std::printf("loudness target -16: quiet take %.1f dB, loud take %.1f dB (without it they differ by %.1f dB)\n", quietTake, loudTake, unleveled);
+  CHECK(std::fabs(quietTake - loudTake) < 4.0f, "loudness target leaves the takes %.1f dB apart", quietTake - loudTake);
+  CHECK(std::fabs(unleveled) > 6.0f, "the test takes are not different enough to prove anything (%.1f dB)", unleveled);
+
   std::printf("microphone profile, -6 dB at 1 kHz: 1 kHz %+.1f dB, 200 Hz %+.1f dB\n", at1k, at200);
   CHECK(at1k < -3.5f && at1k > -8.0f, "microphone band changed 1 kHz by %.1f dB instead of about -6", at1k);
   CHECK(std::fabs(at200) < 1.5f, "microphone band at 1 kHz moved 200 Hz by %.1f dB", at200);

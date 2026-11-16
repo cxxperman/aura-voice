@@ -37,9 +37,13 @@ target_link_options(AuraSetup PRIVATE "/MANIFESTUAC:level='requireAdministrator'
 add_executable(dsp_test dsp_test.cpp)
 target_link_libraries(dsp_test PRIVATE rnnoise)
 
+# Runs a recording through the same chain as the module (used by the window's «Записи» page).
+add_executable(AuraRender render.cpp)
+target_link_libraries(AuraRender PRIVATE rnnoise)
+
 # DeepFilterNet 3 (optional): pass -DAURA_DFN_LIB=<df.lib>, libDF built as a static library with the static C runtime.
 if(AURA_DFN_LIB)
-  foreach(target AuraAPO dsp_test)
+  foreach(target AuraAPO dsp_test AuraRender)
     target_compile_definitions(${target} PRIVATE AURA_HAVE_DFN)
     target_link_libraries(${target} PRIVATE ${AURA_DFN_LIB} ws2_32 userenv ntdll bcrypt advapi32 dbghelp synchronization)
   endforeach()
