@@ -56,6 +56,116 @@ const engine = new Engine();
 let devices = [];
 let busy = false;
 
+/* ───────── System module (APO inside the microphone) ─────────
+ * When it is installed, Windows itself runs the voice chain inside the microphone,
+ * so every program hears the processed voice. This window then only sends settings. */
+let sys = { available: false, installed: false, alive: false };
+let sysMessage = '';
+let sysBusy = false;
+let holdingOriginal = false;
+let recording = false;
+let onSince = 0;
+
+function pushSystem() {
+  if (!sys.installed || TEST) return;
+  // Off, "hold to compare" and sample recording all want the untouched microphone.
+  const enabled = state.on && !holdingOriginal && !recording;
+  const v = state.v;
+  window.auraSystem.write(
+    [
+      `enabled=${enabled ? 1 : 0}`,
+      ...Object.keys(v).map((k) => `${k}=${v[k]}`),
+      `auto=${state.auto ? 1 : 0}`,
+      `ingain=${state.inGain}`,
+      `outgain=${state.outGain}`,
+    ].join('\r\n') + '\r\n'
+  );
+}
+
+function applyAll() {
+  engine.apply(state);
+  pushSystem();
+}
+
+// In system mode the live path must pass the microphone through untouched (it is already processed);
+// the in-app chain is only used to audition a recorded sample.
+function syncBypass() {
+  if (sys.installed) engine.setBypass(!engine.sampleMode);
+}
+
+async function pollSystem() {
+  if (!window.auraSystem || TEST) return;
+  const before = sys.installed;
+  sys = await window.auraSystem.status();
+  if (sys.installed !== before) {
+    for (const id of ['ns', 'outputId']) $(`#${id}`).disabled = sys.installed;
+    if (engine.running) await restartEngine();
+    pushSystem();
+    renderRoute();
+  }
+  renderSystem();
+  if (engine.running) liveStatus();
+}
+
+async function restartEngine() {
+  await engine.stop();
+  await setPower(true);
+}
+
+function renderSystem() {
+  const card = $('#systemCard');
+  const btn = $('#sysBtn');
+  const alt = $('#sysAlt');
+  card.hidden = !sys.available && !sys.installed;
+  if (card.hidden) return;
+
+  // Give Windows a few seconds to load the module before calling it a failure.
+  const silent = sys.installed && engine.running && !engine.sampleMode && !sys.alive && Date.now() - onSince > 6000;
+  let title, text, action;
+  if (!sys.installed) {
+    title = 'Встроить Aura в микрофон';
+    text = 'Обработанный голос услышат все программы — без виртуального кабеля. Windows спросит права администратора, звук в системе прервётся на пару секунд.';
+    action = 'Встроить';
+  } else if (silent) {
+    title = 'Windows не запустила модуль';
+    text = 'Скорее всего, мешает защищённый режим звукового процесса: у модуля нет платной подписи. Можно разрешить загрузку — это выключает защищённый режим (он нужен только для DRM-аудио) и возвращается при удалении.';
+    action = 'Разрешить и повторить';
+  } else {
+    title = 'Aura встроена в микрофон';
+    text = sys.alive ? 'Модуль работает. Голос остаётся обработанным, даже когда это окно закрыто.' : 'Включите сферу, чтобы проверить, что модуль работает.';
+    action = 'Убрать';
+  }
+  card.classList.toggle('warn', silent);
+  $('#sysTitle').textContent = title;
+  $('#sysText').textContent = sysMessage || text;
+  btn.textContent = sysBusy ? 'Подождите…' : action;
+  btn.disabled = alt.disabled = sysBusy;
+  alt.hidden = !silent;
+  btn.dataset.action = !sys.installed ? 'install' : silent ? 'unprotect' : 'uninstall';
+}
+
+async function runSetup(action) {
+  if (sysBusy) return;
+  sysBusy = true;
+  sysMessage = 'Подтвердите запрос Windows…';
+  renderSystem();
+  const wasOn = engine.running;
+  if (wasOn) await engine.stop(); // the audio service is about to restart under us
+  const res = await window.auraSystem.setup(action === 'uninstall' ? 'uninstall' : 'install', action === 'unprotect');
+  sysMessage = res.cancelled ? 'Отменено — ничего не изменилось.' : res.lines.join(' ') || (res.ok ? '' : 'Установщик не ответил.');
+  sysBusy = false;
+  await new Promise((r) => setTimeout(r, 1500)); // let the audio service come back
+  await pollSystem();
+  if (wasOn) await setPower(true);
+  renderPower();
+  setTimeout(() => {
+    sysMessage = '';
+    renderSystem();
+  }, 9000);
+}
+$('#sysBtn').addEventListener('click', (e) => runSetup(e.currentTarget.dataset.action));
+$('#sysAlt').addEventListener('click', () => runSetup('uninstall'));
+
 /* ───────── Status ───────── */
 const statusEl = $('#status');
 function setStatus(text, isError = false) {
@@ -67,6 +177,7 @@ function liveStatus() {
   if (engine.sampleMode) return setStatus('Играет проба — настраивайте звук');
   const c = engine.ctx;
   // +12 ms: look-ahead of the compressor and the limiter.
+  if (sys.installed) return setStatus(sys.alive ? 'В эфире · встроено в микрофон, без задержки' : 'В эфире · жду ответа модуля…');
   const ms = Math.round((c.baseLatency + (c.outputLatency || 0)) * 1000 + 12);
   setStatus(`В эфире · задержка около ${ms} мс`);
 }
@@ -79,7 +190,9 @@ async function setPower(on) {
   try {
     if (on && !engine.running) {
       setStatus('Запускаю…');
-      await engine.start(state, { test: TEST });
+      await engine.start(state, { test: TEST, system: sys.installed });
+      onSince = Date.now();
+      syncBypass();
       await refreshDevices();
     } else if (!on && engine.running) {
       await engine.stop();
@@ -94,7 +207,9 @@ async function setPower(on) {
   }
   busy = false;
   save();
+  pushSystem();
   renderPower();
+  renderSystem();
 }
 function renderPower() {
   const on = engine.running;
@@ -121,7 +236,7 @@ for (const [id, p] of Object.entries(PRESETS)) {
     state.v = { ...p.v };
     renderPreset();
     renderSliders();
-    engine.apply(state);
+    applyAll();
     save();
   });
   presetsEl.append(b);
@@ -150,7 +265,7 @@ for (const p of PARAMS) {
     state.v[p.id] = Number(input.value);
     value.textContent = input.value;
     fill(input);
-    engine.apply(state);
+    applyAll();
     save();
   });
   sliderInputs[p.id] = { input, value };
@@ -177,7 +292,7 @@ for (const id of ['inGain', 'outGain']) {
   input.addEventListener('input', () => {
     state[id] = Number(input.value);
     render();
-    engine.apply(state);
+    applyAll();
     save();
   });
 }
@@ -189,7 +304,7 @@ for (const id of ['auto', 'ns', 'monitor']) {
   box.addEventListener('change', async () => {
     state[id] = box.checked;
     save();
-    engine.apply(state);
+    applyAll();
     // Noise suppression is a property of the capture itself — the microphone must be reopened.
     if (id === 'ns' && engine.running && !TEST) await engine.openMic(state).catch(() => {});
   });
@@ -229,6 +344,11 @@ async function refreshDevices() {
 
 function renderRoute() {
   const el = $('#route');
+  if (sys.installed) {
+    el.classList.remove('warn');
+    el.textContent = 'Aura встроена в микрофон: в Discord, OBS и играх ничего переключать не нужно, выбирайте свой обычный микрофон.';
+    return;
+  }
   const out = devices.find((d) => d.kind === 'audiooutput' && d.deviceId === state.outputId);
   el.classList.toggle('warn', !out);
   if (!out) {
@@ -264,7 +384,13 @@ navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
 const compareBtn = $('#compare');
 const holdCompare = (on) => {
   compareBtn.classList.toggle('held', on);
-  engine.setBypass(on);
+  if (sys.installed && !engine.sampleMode) {
+    // The processing lives in the microphone: switch it off there for as long as the button is held.
+    holdingOriginal = on;
+    pushSystem();
+  } else {
+    engine.setBypass(on);
+  }
 };
 compareBtn.addEventListener('pointerdown', (e) => {
   compareBtn.setPointerCapture(e.pointerId);
@@ -277,7 +403,6 @@ compareBtn.addEventListener('blur', () => holdCompare(false));
 
 /* ───────── Sample loop ───────── */
 const sampleBtn = $('#sample');
-let recording = false;
 function renderSample() {
   sampleBtn.classList.toggle('live', engine.sampleMode || recording);
   if (!recording) sampleBtn.textContent = engine.sampleMode ? 'Остановить пробу' : 'Записать пробу';
@@ -289,6 +414,11 @@ sampleBtn.addEventListener('click', async () => {
   } else {
     recording = true;
     renderSample();
+    if (sys.installed) {
+      // Record the raw microphone: the module steps aside, then the sample is auditioned through the in-app chain.
+      pushSystem();
+      await new Promise((r) => setTimeout(r, 400));
+    }
     setStatus('Говорите — идёт запись');
     try {
       await engine.recordSample(6, (s) => (sampleBtn.textContent = `Запись… ${s}`));
@@ -298,6 +428,8 @@ sampleBtn.addEventListener('click', async () => {
     }
     recording = false;
   }
+  syncBypass();
+  pushSystem();
   renderSample();
   liveStatus();
 });
@@ -419,6 +551,8 @@ async function boot() {
     } catch {}
   }
   await refreshDevices();
+  await pollSystem();
+  setInterval(pollSystem, 2000);
   if (state.on) await setPower(true);
 
   if (TEST) {

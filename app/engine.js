@@ -93,7 +93,9 @@ class Engine {
   get running() { return !!this.ctx; }
   get sampleMode() { return !!this.sampleSrc; }
 
-  async start(state, { test = false } = {}) {
+  // `system`: the voice is already processed inside the microphone by the APO module,
+  // so nothing is sent to a virtual cable — the graph only meters and monitors.
+  async start(state, { test = false, system = false } = {}) {
     const c = (this.ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 }));
     const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
     await c.audioWorklet.addModule(url);
@@ -114,7 +116,7 @@ class Engine {
     } else {
       await this.openMic(state);
     }
-    await this.setOutput(test ? null : state.outputId);
+    await this.setOutput(test || system ? null : state.outputId);
     this.audio.srcObject = this.n.msDest.stream;
     await this.setMonitorDevice(state.monitorId);
     this.audio.play().catch(() => {});
@@ -295,7 +297,7 @@ class Engine {
     set(n.revGain.gain, v.space * 0.45);
 
     const p = n.dyn.parameters;
-    p.get('gate').setValueAtTime(v.clean > 0.01 ? -75 + v.clean * 40 : -100, t);
+    p.get('gate').setValueAtTime(v.clean > 0.01 ? -65 + v.clean * 40 : -100, t);
     p.get('deess').setValueAtTime(v.deess, t);
     p.get('auto').setValueAtTime(state.auto ? 1 : 0, t);
 

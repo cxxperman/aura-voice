@@ -95,8 +95,7 @@ ipcMain.handle('system:setup', (_e, action, unprotect) => {
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true }, (err) => {
       let lines = [];
-      try { lines = fs.readFileSync(log, 'utf8').split(/?
-/).filter(Boolean); } catch {}
+      try { lines = fs.readFileSync(log, 'utf8').split(/\r?\n/).filter(Boolean); } catch {}
       const ok = lines[0] === 'result=ok';
       resolve({ ok, cancelled: !!err && !lines.length, lines: lines.slice(1).filter((l) => !l.startsWith('device=')) });
     });

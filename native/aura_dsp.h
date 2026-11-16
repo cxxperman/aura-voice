@@ -226,7 +226,7 @@ class Chain {
     makeupT_ = dbToGain(0.3f * -thrDb_ * (1.0f - 1.0f / ratio_));
     widthT_ = p.width * 0.55f;
     revT_ = p.space * 4.5f;
-    gateThr_ = p.clean > 0.01f ? dbToGain(-75.0f + p.clean * 40.0f) : 1e-5f;
+    gateThr_ = p.clean > 0.01f ? dbToGain(-65.0f + p.clean * 40.0f) : 1e-5f;
     inT_ = dbToGain(p.inGainDb);
     outT_ = dbToGain(p.outGainDb);
   }
