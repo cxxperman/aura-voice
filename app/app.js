@@ -959,27 +959,50 @@ $('#padStop').addEventListener('click', () => {
  * live in the module, so every program hears them. Values are the module's own units.
  * `fxnatural` = move the pitch but keep the timbre: a different person, not a cartoon. */
 const FX_ZERO = { fxpitch: 0, fxnatural: 0, fxformant: 0, fxring: 0, fxringmix: 0, fxecho: 0, fxechofb: 0, fxechomix: 0, fxphone: 0, fxdrive: 0, fxtrem: 0, fxtremdepth: 0, fxlp: 0, fxspace: 0 };
+// Line symbols in the manner of SF Symbols, drawn on a 24-unit grid; each voice shows one in white
+// on a rounded square of a system colour, the way iOS Settings marks its rows.
+const SYMBOLS = {
+  mic: '<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  person: '<circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+  child: '<circle cx="12" cy="9.5" r="3"/><path d="M7 20a5 5 0 0 1 10 0"/>',
+  up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+  balloon: '<path d="M12 3a6 6 0 0 1 6 6c0 4-4 7-6 7s-6-3-6-7a6 6 0 0 1 6-6z"/><path d="M12 16v5"/>',
+  note: '<path d="M9 18V6l10-2v12"/><circle cx="6.8" cy="18" r="2.3"/><circle cx="16.8" cy="16" r="2.3"/>',
+  mountain: '<path d="M3 19l6-10 4 6 2-3 6 7z"/>',
+  flame: '<path d="M12 3c1 4 5 5.5 5 10.5a5 5 0 0 1-10 0c0-2 .8-3.2 2-4.2 0 2 .8 3 1.8 3 .2-3-.8-5.3 1.2-9.3z"/>',
+  cpu: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"/>',
+  star: '<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z"/>',
+  phone: '<path d="M6 3.5h3l1.8 4.8-2.3 1.5a11 11 0 0 0 5.7 5.7l1.5-2.3 4.8 1.8v3a2 2 0 0 1-2 2A15.5 15.5 0 0 1 4 5.5a2 2 0 0 1 2-2z"/>',
+  radio: '<rect x="8" y="7.5" width="8" height="13" rx="2"/><path d="M10.5 7.5V3.5M10.5 11.5h3"/>',
+  megaphone: '<path d="M4 10v4l3.5.6V9.4zM7.5 9.4L19 5.5v13L7.5 14.6M9.5 15.2l1 4h2.2"/>',
+  cave: '<path d="M3 20v-8.5a9 9 0 0 1 18 0V20"/><path d="M9 20v-5a3 3 0 0 1 6 0v5"/>',
+  columns: '<path d="M3 9l9-5 9 5zM5 9v9M9.7 9v9M14.3 9v9M19 9v9M3 20h18"/>',
+  waves: '<path d="M3 8c2-2 4-2 6 0s4 2 6 0 4-2 6 0M3 13c2-2 4-2 6 0s4 2 6 0 4-2 6 0M3 18c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/>',
+  pulse: '<path d="M3 12h2.5l2-6 3 12 3-9 2 6 1.5-3H21"/>',
+  sliders: '<path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.6"/><circle cx="8" cy="17" r="2.6"/>',
+};
 const VOICES = {
-  none: { name: 'Обычный голос', hint: 'Без эффекта', icon: '🎙️', hue: 212, p: {} },
-  girl: { name: 'Девушка', hint: 'Выше, тембр почти свой', icon: '👩', hue: 330, p: { fxpitch: 5, fxnatural: 1, fxformant: 1.5 } },
-  guy: { name: 'Парень', hint: 'Ниже, тембр почти свой', icon: '🧔', hue: 218, p: { fxpitch: -4, fxnatural: 1, fxformant: -1.5 } },
-  kid: { name: 'Ребёнок', hint: 'Высокий и маленький', icon: '🧒', hue: 46, p: { fxpitch: 8, fxnatural: 1, fxformant: 3 } },
-  higher: { name: 'Выше', hint: 'Тот же человек, тоньше', icon: '⬆️', hue: 188, p: { fxpitch: 3, fxnatural: 1 } },
-  lower: { name: 'Ниже', hint: 'Тот же человек, глубже', icon: '⬇️', hue: 250, p: { fxpitch: -3, fxnatural: 1 } },
-  helium: { name: 'Гелий', hint: 'Как после шарика', icon: '🎈', hue: 350, p: { fxpitch: 7 } },
-  chipmunk: { name: 'Бурундук', hint: 'Совсем тоненький', icon: '🐿️', hue: 28, p: { fxpitch: 11 } },
-  giant: { name: 'Великан', hint: 'Низкий и большой', icon: '🗿', hue: 160, p: { fxpitch: -6 } },
-  demon: { name: 'Демон', hint: 'Низко, с хрипом и залом', icon: '😈', hue: 0, p: { fxpitch: -8, fxdrive: 30, fxspace: 50 } },
-  robot: { name: 'Робот', hint: 'Металлический, ровный', icon: '🤖', hue: 200, p: { fxring: 55, fxringmix: 85 } },
-  alien: { name: 'Пришелец', hint: 'Звенящий, не отсюда', icon: '👽', hue: 130, p: { fxring: 190, fxringmix: 60, fxpitch: 3 } },
-  phone: { name: 'Телефон', hint: 'Узкая полоса, как в трубке', icon: '📞', hue: 150, p: { fxphone: 1 } },
-  radio: { name: 'Рация', hint: 'Трубка с перегрузом', icon: '📻', hue: 40, p: { fxphone: 1, fxdrive: 55 } },
-  megaphone: { name: 'Мегафон', hint: 'Громкоговоритель на площади', icon: '📣', hue: 18, p: { fxphone: 1, fxdrive: 80, fxecho: 90, fxechofb: 20, fxechomix: 25 } },
-  cave: { name: 'Пещера', hint: 'Долгое эхо', icon: '🦇', hue: 265, p: { fxecho: 260, fxechofb: 50, fxechomix: 45, fxspace: 80 } },
-  hall: { name: 'Собор', hint: 'Большой гулкий зал', icon: '⛪', hue: 282, p: { fxspace: 100 } },
-  underwater: { name: 'Под водой', hint: 'Глухо и с бульканьем', icon: '🌊', hue: 196, p: { fxlp: 600, fxtrem: 5, fxtremdepth: 50 } },
-  shaky: { name: 'Дрожащий', hint: 'Голос трясётся', icon: '🥶', hue: 205, p: { fxtrem: 8, fxtremdepth: 70 } },
-  custom: { name: 'Свой', hint: 'Соберите из ручек ниже', icon: '🎛️', hue: 44, p: null },
+  none: { name: 'Обычный голос', hint: 'Без эффекта', icon: 'mic', color: '#8e8e93', p: {} },
+  girl: { name: 'Девушка', hint: 'Выше, тембр почти свой', icon: 'person', color: '#ff375f', p: { fxpitch: 5, fxnatural: 1, fxformant: 1.5 } },
+  guy: { name: 'Парень', hint: 'Ниже, тембр почти свой', icon: 'person', color: '#0a84ff', p: { fxpitch: -4, fxnatural: 1, fxformant: -1.5 } },
+  kid: { name: 'Ребёнок', hint: 'Высокий и маленький', icon: 'child', color: '#ff9f0a', p: { fxpitch: 8, fxnatural: 1, fxformant: 3 } },
+  higher: { name: 'Выше', hint: 'Тот же человек, тоньше', icon: 'up', color: '#30b0c7', p: { fxpitch: 3, fxnatural: 1 } },
+  lower: { name: 'Ниже', hint: 'Тот же человек, глубже', icon: 'down', color: '#5e5ce6', p: { fxpitch: -3, fxnatural: 1 } },
+  helium: { name: 'Гелий', hint: 'Как после шарика', icon: 'balloon', color: '#ff453a', p: { fxpitch: 7 } },
+  chipmunk: { name: 'Бурундук', hint: 'Совсем тоненький', icon: 'note', color: '#a2845e', p: { fxpitch: 11 } },
+  giant: { name: 'Великан', hint: 'Низкий и большой', icon: 'mountain', color: '#34c759', p: { fxpitch: -6 } },
+  demon: { name: 'Демон', hint: 'Низко, с хрипом и залом', icon: 'flame', color: '#d70015', p: { fxpitch: -8, fxdrive: 30, fxspace: 50 } },
+  robot: { name: 'Робот', hint: 'Металлический, ровный', icon: 'cpu', color: '#64748b', p: { fxring: 55, fxringmix: 85 } },
+  alien: { name: 'Пришелец', hint: 'Звенящий, не отсюда', icon: 'star', color: '#30d158', p: { fxring: 190, fxringmix: 60, fxpitch: 3 } },
+  phone: { name: 'Телефон', hint: 'Узкая полоса, как в трубке', icon: 'phone', color: '#34c759', p: { fxphone: 1 } },
+  radio: { name: 'Рация', hint: 'Трубка с перегрузом', icon: 'radio', color: '#ff9500', p: { fxphone: 1, fxdrive: 55 } },
+  megaphone: { name: 'Мегафон', hint: 'Громкоговоритель на площади', icon: 'megaphone', color: '#ff6b00', p: { fxphone: 1, fxdrive: 80, fxecho: 90, fxechofb: 20, fxechomix: 25 } },
+  cave: { name: 'Пещера', hint: 'Долгое эхо', icon: 'cave', color: '#8e5bd9', p: { fxecho: 260, fxechofb: 50, fxechomix: 45, fxspace: 80 } },
+  hall: { name: 'Собор', hint: 'Большой гулкий зал', icon: 'columns', color: '#af52de', p: { fxspace: 100 } },
+  underwater: { name: 'Под водой', hint: 'Глухо и с бульканьем', icon: 'waves', color: '#32ade6', p: { fxlp: 600, fxtrem: 5, fxtremdepth: 50 } },
+  shaky: { name: 'Дрожащий', hint: 'Голос трясётся', icon: 'pulse', color: '#00c7be', p: { fxtrem: 8, fxtremdepth: 70 } },
+  custom: { name: 'Свой', hint: 'Соберите из ручек ниже', icon: 'sliders', color: '#ffcc00', p: null },
 };
 // The knobs of the user's own voice, in plain words; customFx() turns them into module values.
 const CUSTOM_KNOBS = [
@@ -1030,10 +1053,10 @@ for (const [id, voice] of Object.entries(VOICES)) {
   b.type = 'button';
   b.className = 'voice';
   b.setAttribute('role', 'radio');
-  b.style.setProperty('--h', voice.hue);
   const icon = document.createElement('span');
   icon.className = 'voice-icon';
-  icon.textContent = voice.icon;
+  icon.style.setProperty('--c', voice.color);
+  icon.innerHTML = `<svg viewBox="0 0 24 24">${SYMBOLS[voice.icon]}</svg>`; // static markup from the table above
   icon.setAttribute('aria-hidden', 'true');
   const text = document.createElement('span');
   text.className = 'voice-text';
@@ -1110,8 +1133,7 @@ function renderVoices() {
   // The current voice is always visible under the big title, whatever page is open.
   const chip = $('#fxChip');
   chip.hidden = state.fx === 'none';
-  chip.textContent = `${VOICES[state.fx].icon} ${VOICES[state.fx].name}  ✕`;
-  chip.style.setProperty('--h', VOICES[state.fx].hue);
+  chip.textContent = `${VOICES[state.fx].name}  ✕`;
 }
 $('#fxChip').addEventListener('click', () => selectVoice('none'));
 
@@ -1392,6 +1414,7 @@ const tabButtons = [...$('#tabs').children];
 function showTab(name) {
   if (!tabButtons.some((b) => b.dataset.tab === name)) name = 'voice';
   for (const b of tabButtons) b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  $('#pageTitle').textContent = tabButtons.find((b) => b.dataset.tab === name).textContent.trim(); // the page's large title
   for (const page of document.querySelectorAll('.page')) page.hidden = page.dataset.page !== name;
   try {
     localStorage.setItem('aura.tab', name);
@@ -1406,7 +1429,7 @@ function showTab(name) {
 for (const b of tabButtons) b.addEventListener('click', () => showTab(b.dataset.tab));
 for (const group of [$('#tabs'), presetsEl]) {
   group.addEventListener('keydown', (e) => {
-    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
     e.preventDefault();
     const items = [...group.children];

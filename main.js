@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog, shell } = require('electron');
+const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog, shell, nativeTheme } = require('electron');
 const { execFile } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
@@ -13,6 +13,7 @@ const tabArg = process.argv.find((a) => a.startsWith('--tab=')); // dev: open on
 const dataArg = process.argv.find((a) => a.startsWith('--data=')); // dev: worst-case fixtures (app/dev-fixtures.js)
 const sizeArg = process.argv.find((a) => a.startsWith('--size=')); // dev: WIDTHxHEIGHT
 const zoomArg = process.argv.find((a) => a.startsWith('--zoom='));
+const themeArg = process.argv.find((a) => a.startsWith('--theme=')); // dev: light | dark
 const clickSelector = process.env.AURA_CLICK; // dev: click this selector partway through a --shot run
 const startHidden = process.argv.includes('--hidden'); // launched with Windows: straight to the tray
 const asset = (name) => path.join(__dirname, 'assets', name);
@@ -34,17 +35,18 @@ const HOTKEY_MUTE = 'Ctrl+Shift+F10';
 let hotkeys = { power: HOTKEY_POWER, mute: HOTKEY_MUTE }; // what the window last asked for
 
 function createWindow() {
+  if (devRun && themeArg) nativeTheme.themeSource = themeArg.slice('--theme='.length) === 'light' ? 'light' : 'dark';
   win = new BrowserWindow({
     width: 1060,
     height: 900,
     minWidth: 940,
     minHeight: 700,
     show: false,
-    backgroundColor: '#09090d',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#f2f2f7',
     title: 'Aura',
     icon: asset('icon.ico'),
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#00000000', symbolColor: '#ffffff', height: 44 },
+    titleBarOverlay: { color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000', height: 30 },
     webPreferences: {
       // The voice must keep flowing while the window is minimised.
       backgroundThrottling: false,
@@ -56,6 +58,14 @@ function createWindow() {
   });
 
   win.removeMenu();
+  // Light or dark with Windows, live: the page follows through prefers-color-scheme, the window
+  // buttons and the colour shown before the page paints have to be told.
+  nativeTheme.on('updated', () => {
+    if (win.isDestroyed()) return;
+    const dark = nativeTheme.shouldUseDarkColors;
+    win.setBackgroundColor(dark ? '#1c1c1e' : '#f2f2f7');
+    win.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#ffffff' : '#000000', height: 30 });
+  });
   if (devRun && sizeArg) {
     const [w, h] = sizeArg.slice('--size='.length).split('x').map(Number);
     win.setMinimumSize(300, 300);

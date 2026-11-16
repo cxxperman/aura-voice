@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; media-src 'self' blob: mediastream:; img-src 'self' data:">
+  <meta name="color-scheme" content="light dark">
   <title>Aura</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -11,47 +12,50 @@
     <div class="intro-fish" id="introFish"></div>
     <div class="intro-name">Aura</div>
   </div>
-  <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
-  <header class="titlebar"><img src="../assets/icon.png" alt=""><span>Aura</span></header>
+  <div class="drag" aria-hidden="true"></div>
 
-  <main>
-    <section class="hero">
+  <div class="window">
+    <!-- Sidebar: what Aura is doing right now, and where to go. -->
+    <aside class="sidebar hero">
+      <div class="brand"><img src="../assets/icon.png" alt=""><span>Aura</span></div>
+
       <button class="orb" id="power" aria-pressed="false" aria-label="Включить обработку голоса">
         <canvas id="orb" aria-hidden="true"></canvas>
         <svg class="orb-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 3v8" /><path d="M6.6 6.8a7.5 7.5 0 1 0 10.8 0" />
         </svg>
       </button>
-
       <h1 id="presetTitle">Студия</h1>
       <p class="status" id="status" role="status">Нажмите на сферу, чтобы включить</p>
       <button type="button" class="fx-chip" id="fxChip" hidden aria-label="Снять эффект голоса"></button>
 
-      <div class="meters">
-        <div class="meter"><span>Вход</span><div class="bar"><i id="mIn"></i></div><b id="mInDb">—</b></div>
-        <div class="meter"><span>Выход</span><div class="bar"><i id="mOut"></i></div><b id="mOutDb">—</b></div>
-        <div class="meter"><span>Сжатие</span><div class="bar gr"><i id="mGr"></i></div><b id="mGrDb">—</b></div>
-        <div class="meter"><span>Громкость</span><div class="bar lufs"><i id="mLufs"></i></div><b id="mLufsDb">—</b></div>
-      </div>
-
-      <div class="actions">
-        <button class="pill" id="compare" disabled>Оригинал</button>
-        <button class="pill" id="sample" disabled>Записать пробу</button>
-        <button class="pill" id="tune" disabled>Автонастройка</button>
-      </div>
-      <p class="hint" id="actionHint">«Оригинал» — удерживайте, чтобы сравнить. «Проба» крутит 6 секунд вашего голоса, пока вы настраиваете звук. «Автонастройка» слушает комнату и голос и сама ставит усиление, тишину в паузах и шумоподавление.</p>
-    </section>
-
-    <section class="controls">
-      <nav class="tabs" id="tabs" role="tablist" aria-label="Разделы">
+      <nav class="tabs" id="tabs" role="tablist" aria-label="Разделы" aria-orientation="vertical">
         <button type="button" role="tab" data-tab="voice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Голос</span></button>
         <button type="button" role="tab" data-tab="effects"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3l1.9 5.6L18.5 10.5l-5.6 1.9L11 18l-1.9-5.6L3.5 10.5l5.6-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg><span>Эффекты</span></button>
         <button type="button" role="tab" data-tab="sounds"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/></svg><span>Звуки</span></button>
         <button type="button" role="tab" data-tab="setup"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.6"/><circle cx="8" cy="17" r="2.6"/></svg><span>Настройки</span></button>
       </nav>
 
+      <div class="meters" aria-label="Уровни">
+        <div class="meter"><span>Вход</span><div class="bar"><i id="mIn"></i></div><b id="mInDb">—</b></div>
+        <div class="meter"><span>Выход</span><div class="bar"><i id="mOut"></i></div><b id="mOutDb">—</b></div>
+        <div class="meter"><span>Сжатие</span><div class="bar gr"><i id="mGr"></i></div><b id="mGrDb">—</b></div>
+        <div class="meter"><span>Громкость</span><div class="bar lufs"><i id="mLufs"></i></div><b id="mLufsDb">—</b></div>
+      </div>
+    </aside>
+
+    <section class="controls content">
+      <header class="toolbar">
+        <h2 id="pageTitle">Голос</h2>
+        <div class="actions">
+          <button class="pill" id="compare" disabled title="Удерживайте, чтобы услышать необработанный микрофон">Оригинал</button>
+          <button class="pill" id="sample" disabled title="Записывает 6 секунд голоса и крутит их по кругу, пока вы настраиваете звук">Записать пробу</button>
+          <button class="pill" id="tune" disabled title="Слушает комнату и голос и сама ставит усиление, тишину в паузах и шумоподавление">Автонастройка</button>
+        </div>
+      </header>
+
       <div class="page" data-page="voice">
-        <div class="card guide" id="guide" hidden>
+        <div class="group guide" id="guide" hidden>
           <b>Три шага до хорошего звука</b>
           <ol>
             <li><button type="button" id="guide1">Встройте Aura в микрофон</button> — тогда её услышат все программы</li>
@@ -60,13 +64,17 @@
           </ol>
           <button type="button" class="guide-close" id="guideClose" aria-label="Скрыть подсказку">×</button>
         </div>
-        <div class="presets" id="presets" role="radiogroup" aria-label="Характер голоса"></div>
 
-        <div class="preset-files"><button type="button" id="presetSave">Сохранить в файл</button><button type="button" id="presetLoad">Загрузить из файла</button></div>
+        <div class="section-title">
+          <span>Характер</span>
+          <span class="preset-files"><button type="button" id="presetSave">Сохранить в файл…</button><button type="button" id="presetLoad">Загрузить…</button></span>
+        </div>
+        <div class="presets segmented" id="presets" role="radiogroup" aria-label="Характер голоса"></div>
 
-        <div class="card sliders" id="sliders"></div>
+        <div class="sliders" id="sliders"></div>
 
-        <div class="card toggles">
+        <div class="section-title"><span>Режимы</span></div>
+        <div class="group toggles">
           <label class="switch"><span><b>Авто-уровень</b><small>Выравнивает громкость, вытягивает тихий микрофон</small></span><input type="checkbox" id="auto"><i></i></label>
           <label class="switch"><span><b>Заглушить микрофон</b><small>Тишина для всех программ<span id="muteKey"></span></small></span><input type="checkbox" id="mute"><i></i></label>
           <label class="switch"><span><b>Слышать себя</b><small>Только в наушниках, иначе будет эхо</small></span><input type="checkbox" id="monitor"><i></i></label>
@@ -74,71 +82,78 @@
       </div>
 
       <div class="page" data-page="effects" hidden>
-        <div class="card voices">
-          <div class="voices-head"><b>Готовые голоса</b><small id="fxNote"></small></div>
-          <div class="voices-grid" id="voices" role="radiogroup" aria-label="Готовый голос"></div>
-        </div>
-        <div class="card fx-custom" id="fxCustom" hidden>
-          <b>Свой голос</b>
-          <div class="fx-knobs" id="fxKnobs"></div>
+        <div class="section-title"><span>Готовые голоса</span><small id="fxNote"></small></div>
+        <div class="voices-grid" id="voices" role="radiogroup" aria-label="Готовый голос"></div>
+        <div class="fx-custom" id="fxCustom" hidden>
+          <div class="section-title"><span>Свой голос</span></div>
+          <div class="fx-knobs sliders" id="fxKnobs"></div>
         </div>
       </div>
 
       <div class="page" data-page="sounds" hidden>
-        <div class="card soundboard">
-          <div class="soundboard-head">
-            <b>Мои звуки</b>
+        <div class="section-title soundboard-head">
+          <span>Мои звуки</span>
+          <span class="soundboard-tools">
             <label class="pad-volume"><span>Громкость</span><input type="range" id="padVolume" min="0" max="100" step="1"></label>
             <button type="button" class="pill small" id="padStop">Стоп</button>
-            <button type="button" class="pill small" id="padAdd">Из файла</button>
-          </div>
-          <div class="pads" id="pads"></div>
-          <p class="pads-empty" id="padsEmpty">Здесь будут ваши звуки: добавьте их из каталога ниже или из файла. Нажатие проигрывает звук в микрофон — его слышат все программы — и вам в наушники. Обработку голоса для этого включать не нужно. Первые девять включаются ещё и по Ctrl+Alt+1…9, даже из игры.</p>
+            <button type="button" class="pill small" id="padAdd">Из файла…</button>
+          </span>
         </div>
+        <div class="pads" id="pads"></div>
+        <p class="pads-empty group" id="padsEmpty">Здесь будут ваши звуки: добавьте их из каталога ниже или из файла. Нажатие проигрывает звук в микрофон — его слышат все программы — и вам в наушники. Обработку голоса для этого включать не нужно. Первые девять включаются ещё и по Ctrl+Alt+1…9, даже из игры.</p>
 
-        <div class="card catalog">
-          <div class="catalog-head">
-            <input type="search" id="catalogSearch" placeholder="Найти звук: мем, игра, фраза…" autocomplete="off" spellcheck="false" aria-label="Поиск звуков">
-            <div class="catalog-feeds" id="catalogFeeds" role="radiogroup" aria-label="Подборка">
-              <button type="button" role="radio" data-feed="popular">Популярное</button>
-              <button type="button" role="radio" data-feed="trending">В тренде</button>
-              <button type="button" role="radio" data-feed="latest">Новое</button>
-            </div>
+        <div class="section-title catalog-head">
+          <span>Каталог</span>
+          <div class="catalog-feeds segmented" id="catalogFeeds" role="radiogroup" aria-label="Подборка">
+            <button type="button" role="radio" data-feed="popular">Популярное</button>
+            <button type="button" role="radio" data-feed="trending">В тренде</button>
+            <button type="button" role="radio" data-feed="latest">Новое</button>
           </div>
-          <div class="catalog-list" id="catalogList"></div>
-          <div class="catalog-foot">
-            <button type="button" class="pill small" id="catalogMore" hidden>Показать ещё</button>
-            <span id="catalogNote"></span>
-            <button type="button" class="link" id="catalogSite">Каталог: UwUpad</button>
-          </div>
+        </div>
+        <input type="search" class="search" id="catalogSearch" placeholder="Поиск: мем, игра, фраза" autocomplete="off" spellcheck="false" aria-label="Поиск звуков">
+        <div class="group catalog-list" id="catalogList"></div>
+        <div class="catalog-foot">
+          <button type="button" class="pill small" id="catalogMore" hidden>Показать ещё</button>
+          <span id="catalogNote"></span>
+          <button type="button" class="link" id="catalogSite">Каталог: UwUpad</button>
         </div>
       </div>
 
       <div class="page" data-page="setup" hidden>
-        <div class="card system" id="systemCard" hidden>
+        <div class="section-title"><span>Модуль в микрофоне</span></div>
+        <div class="group system" id="systemCard" hidden>
           <div><b id="sysTitle"></b><small id="sysText"></small>
             <label class="sys-device" id="sysDeviceRow" hidden><span>Микрофон</span><select id="sysDevice" aria-label="Микрофон для модуля"></select></label>
           </div>
           <div class="system-actions">
             <button class="pill" id="sysAlt" hidden>Убрать</button>
-            <button class="pill" id="sysBtn"></button>
+            <button class="pill prominent" id="sysBtn"></button>
           </div>
         </div>
 
-        <div class="card devices">
+        <div class="section-title"><span>Устройства</span></div>
+        <div class="group devices">
           <label class="field"><span>Микрофон</span><select id="inputId"></select></label>
           <label class="field"><span>Выход в приложения</span><select id="outputId"></select></label>
           <label class="field"><span>Наушники</span><select id="monitorId"></select></label>
+        </div>
+        <p class="route footnote" id="route"></p>
+
+        <div class="section-title"><span>Обработка</span></div>
+        <div class="group devices">
           <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 30 мс</option></select></label>
           <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
           <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
-          <div class="field gain"><span>Клавиша: обработка голоса</span><button type="button" class="hotkey" id="key-power"></button><small class="key-note" id="note-power" role="status"></small></div>
-          <div class="field gain"><span>Клавиша: заглушить микрофон</span><button type="button" class="hotkey" id="key-mute"></button><small class="key-note" id="note-mute" role="status"></small></div>
-          <p class="route" id="route"></p>
+        </div>
+
+        <div class="section-title"><span>Горячие клавиши</span></div>
+        <div class="group devices">
+          <div class="field key"><span>Обработка голоса</span><button type="button" class="hotkey" id="key-power"></button><small class="key-note" id="note-power" role="status"></small></div>
+          <div class="field key"><span>Заглушить микрофон</span><button type="button" class="hotkey" id="key-mute"></button><small class="key-note" id="note-mute" role="status"></small></div>
         </div>
       </div>
     </section>
-  </main>
+  </div>
 
   <script src="engine.js"></script>
   <script src="app.js"></script>
