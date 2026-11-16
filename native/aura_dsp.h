@@ -419,8 +419,13 @@ class NaturalShifter {
       score_[size_t(count)] = correlate(lag, window, 4);
       best = std::max(best, score_[size_t(count)]);
     }
-    voiced_ = best >= 0.4f;
-    if (!voiced_) return; // unvoiced (s, sh, breath): any period will do, keep the last
+    // Clearly periodic: voiced. Clearly not: noise, and its grains are scattered. In between (the
+    // edges of words) the last verdict stands, so a fading vowel is not treated as noise.
+    if (best < 0.4f) {
+      if (best < 0.25f) voiced_ = false;
+      return; // keep the last period
+    }
+    voiced_ = true;
     for (int j = 1; j + 1 < count; j++) {
       if (score_[size_t(j)] >= 0.88f * best && score_[size_t(j)] >= score_[size_t(j - 1)] && score_[size_t(j)] >= score_[size_t(j + 1)]) {
         const int around = minPeriod_ + 4 * j;
