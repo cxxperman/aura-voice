@@ -67,6 +67,18 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
     else if (key == "pop") s.params.pop = clamp(v / 100, 0, 1);
     else if (key == "pitch") s.params.pitch = clamp(v, -12, 12);
     else if (key == "dereverb") s.dereverb = clamp(v / 100, 0, 1);
+    else if (key == "fxpitch") s.params.fxPitch = clamp(v, -12, 12);
+    else if (key == "fxring") s.params.fxRingHz = clamp(v, 0, 2000);
+    else if (key == "fxringmix") s.params.fxRingMix = clamp(v / 100, 0, 1);
+    else if (key == "fxecho") s.params.fxEchoMs = clamp(v, 0, 600);
+    else if (key == "fxechofb") s.params.fxEchoFb = clamp(v / 100, 0, 0.85);
+    else if (key == "fxechomix") s.params.fxEchoMix = clamp(v / 100, 0, 1);
+    else if (key == "fxphone") s.params.fxPhone = v > 0.5 ? 1.0f : 0.0f;
+    else if (key == "fxdrive") s.params.fxDrive = clamp(v / 100, 0, 1);
+    else if (key == "fxtrem") s.params.fxTremHz = clamp(v, 0, 30);
+    else if (key == "fxtremdepth") s.params.fxTremDepth = clamp(v / 100, 0, 1);
+    else if (key == "fxlp") s.params.fxLowpassHz = clamp(v, 0, 8000);
+    else if (key == "fxspace") s.params.fxSpace = clamp(v / 100, 0, 1);
     else if (key == "warmth") s.params.warmth = clamp(v / 100, 0, 1);
     else if (key == "clarity") s.params.clarity = clamp(v / 100, 0, 1);
     else if (key == "air") s.params.air = clamp(v / 100, 0, 1);

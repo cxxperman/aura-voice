@@ -243,6 +243,98 @@ static void runDeep(const char* model) {
 }
 #endif
 
+// The point of the aligned shifter: a steady voice must stay steady. Measure how much the loudness
+// wobbles (10 ms windows) with the taps aligned and with the plain two-tap shifter.
+static float wobble(bool aligned, float semitones, float f0) {
+  aura::PitchShifter shifter;
+  shifter.prepare(48000);
+  shifter.setAligned(aligned);
+  const float ratio = std::pow(2.0f, semitones / 12.0f);
+  std::vector<float> rms;
+  double sum = 0;
+  for (int i = 0; i < 48000 * 3; i++) {
+    const float t = float(i) / 48000.0f;
+    float x = 0;
+    for (int k = 1; k <= 12; k++) x += std::sin(2 * aura::kPi * f0 * k * t) / float(k);
+    const float y = shifter.process(x * 0.1f, ratio);
+    if (i >= 24000) {
+      sum += double(y) * y;
+      if (i % 480 == 479) {
+        rms.push_back(float(std::sqrt(sum / 480)));
+        sum = 0;
+      }
+    }
+  }
+  double mean = 0, var = 0;
+  for (float r : rms) mean += r;
+  mean /= double(rms.size());
+  for (float r : rms) var += (r - mean) * (r - mean);
+  return float(std::sqrt(var / double(rms.size())) / mean);
+}
+
+static void runPitchQuality() {
+  double plain = 0, aligned = 0;
+  for (float f0 : {105.0f, 140.0f, 210.0f}) {
+    for (float st : {-7.0f, -4.0f, 4.0f, 7.0f}) {
+      const float p = wobble(false, st, f0), a = wobble(true, st, f0);
+      plain += p;
+      aligned += a;
+      std::printf("pitch wobble  f0=%3.0f Hz %+3.0f st : plain %5.1f%%  aligned %5.1f%%\n", f0, st, p * 100, a * 100);
+    }
+  }
+  std::printf("pitch wobble  average: plain %.1f%%  aligned %.1f%%\n", plain / 12 * 100, aligned / 12 * 100);
+  CHECK(aligned < plain * 0.8, "aligning the taps should cut the loudness wobble (%.3f vs %.3f)", aligned / 12, plain / 12);
+}
+
+// Every ready voice must stay finite, inside full scale and audible; the cave must actually echo.
+static void runEffects() {
+  struct Voice { const char* name; aura::Params p; };
+  aura::Params base;
+  auto with = [&](void (*edit)(aura::Params&)) { aura::Params p = base; edit(p); return p; };
+  const Voice voices[] = {
+    {"robot", with([](aura::Params& p) { p.fxRingHz = 55; p.fxRingMix = 0.85f; })},
+    {"alien", with([](aura::Params& p) { p.fxRingHz = 190; p.fxRingMix = 0.6f; p.fxPitch = 3; })},
+    {"helium", with([](aura::Params& p) { p.fxPitch = 7; })},
+    {"demon", with([](aura::Params& p) { p.fxPitch = -7; p.fxDrive = 0.3f; p.fxSpace = 0.5f; })},
+    {"walkie-talkie", with([](aura::Params& p) { p.fxPhone = 1; p.fxDrive = 0.55f; })},
+    {"megaphone", with([](aura::Params& p) { p.fxPhone = 1; p.fxDrive = 0.8f; p.fxEchoMs = 90; p.fxEchoFb = 0.2f; p.fxEchoMix = 0.25f; })},
+    {"cave", with([](aura::Params& p) { p.fxEchoMs = 260; p.fxEchoFb = 0.5f; p.fxEchoMix = 0.45f; p.fxSpace = 0.8f; })},
+    {"underwater", with([](aura::Params& p) { p.fxLowpassHz = 600; p.fxTremHz = 5; p.fxTremDepth = 0.5f; })},
+    {"everything", with([](aura::Params& p) { p.fxPitch = -12; p.fxRingHz = 2000; p.fxRingMix = 1; p.fxEchoMs = 600; p.fxEchoFb = 0.85f; p.fxEchoMix = 1; p.fxPhone = 1; p.fxDrive = 1; p.fxTremHz = 30; p.fxTremDepth = 1; p.fxLowpassHz = 8000; p.fxSpace = 1; })},
+  };
+  const std::vector<float> in = voice(48000);
+  auto render = [&](const aura::Params& p, std::vector<float>& l) {
+    std::vector<float> r(in.size());
+    l.assign(in.size(), 0.0f);
+    aura::Chain chain;
+    chain.prepare(48000);
+    chain.setParams(p);
+    for (size_t at = 0; at < in.size(); at += 480) chain.process(in.data() + at, l.data() + at, r.data() + at, int(std::min<size_t>(480, in.size() - at)));
+  };
+  std::vector<float> plain, out;
+  render(base, plain);
+  const size_t a = size_t(0.7f * 48000), b = size_t(1.9f * 48000), tailFrom = size_t(2.25f * 48000), tailTo = size_t(2.6f * 48000);
+  for (const Voice& v : voices) {
+    render(v.p, out);
+    float peak = 0;
+    bool finite = true;
+    for (float s : out) {
+      finite = finite && std::isfinite(s);
+      peak = std::max(peak, std::fabs(s));
+    }
+    const float speech = rmsDb(out, a, b), tail = rmsDb(out, tailFrom, tailTo);
+    std::printf("voice %-14s speech %6.1f dB | 0.3 s after the phrase %6.1f dB | peak %.3f\n", v.name, speech, tail, peak);
+    CHECK(finite, "%s: output contains NaN or infinity", v.name);
+    CHECK(peak <= 1.0f, "%s: peak %.3f exceeds full scale", v.name, peak);
+    CHECK(speech > -45.0f && speech < -3.0f, "%s: voice level %.1f dB is not usable", v.name, speech);
+    if (std::string(v.name) == "cave") CHECK(tail > rmsDb(plain, tailFrom, tailTo) + 10.0f, "cave: no audible echo after the phrase");
+  }
+  const aura::Settings s = aura::parseSettings("fxpitch=-40\nfxring=55\nfxringmix=85\nfxecho=9999\nfxechofb=200\nfxphone=1\nfxdrive=30\nfxspace=50\n");
+  CHECK(s.params.fxPitch == -12 && s.params.fxRingHz == 55 && std::fabs(s.params.fxRingMix - 0.85f) < 1e-5f && s.params.fxEchoMs == 600 &&
+            std::fabs(s.params.fxEchoFb - 0.85f) < 1e-5f && s.params.fxPhone == 1 && std::fabs(s.params.fxDrive - 0.3f) < 1e-5f,
+        "effect settings were not parsed or clamped");
+}
+
 // How late does each stage deliver? Measured, not assumed: a voice-like glide (its pitch keeps
 // moving, so the match is unambiguous) goes in, and the output is slid against it until it fits.
 static int lagOf(const std::vector<float>& in, const std::vector<float>& out, int maxLag) {
@@ -331,6 +423,8 @@ static void runLatency(const char* model) {
 
 int main(int argc, char** argv) {
   runLatency(argc > 1 ? argv[1] : nullptr);
+  runPitchQuality();
+  runEffects();
   (void)argc;
   (void)argv;
 #ifdef AURA_HAVE_DFN

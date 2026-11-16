@@ -26,7 +26,7 @@ std::atomic<long> gObjects{0};
 
 // ───── Live settings: written by the watcher thread, read by the real-time thread ─────
 
-constexpr int kValues = 15;
+constexpr int kValues = 27;
 
 struct Live {
   std::atomic<bool> enabled{true};
@@ -54,7 +54,8 @@ void store(const aura::Settings& s) {
   const aura::Params& p = s.params;
   const float values[kValues] = {p.warmth, p.clarity, p.air, p.density, p.width, p.space, p.clean,
                                  p.deess, p.autoLevel, p.inGainDb, p.outGainDb, p.pop, s.nsStrength,
-                                 p.pitch, s.dereverb};
+                                 p.pitch, s.dereverb, p.fxPitch, p.fxRingHz, p.fxRingMix, p.fxEchoMs, p.fxEchoFb,
+                                 p.fxEchoMix, p.fxPhone, p.fxDrive, p.fxTremHz, p.fxTremDepth, p.fxLowpassHz, p.fxSpace};
   for (int i = 0; i < kValues; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
   gLive.enabled.store(s.enabled, std::memory_order_relaxed);
   gLive.mute.store(s.mute, std::memory_order_relaxed);
@@ -69,7 +70,8 @@ aura::Settings load() {
   aura::Params& p = s.params;
   float* fields[kValues] = {&p.warmth, &p.clarity, &p.air, &p.density, &p.width, &p.space, &p.clean,
                             &p.deess, &p.autoLevel, &p.inGainDb, &p.outGainDb, &p.pop, &s.nsStrength,
-                            &p.pitch, &s.dereverb};
+                            &p.pitch, &s.dereverb, &p.fxPitch, &p.fxRingHz, &p.fxRingMix, &p.fxEchoMs, &p.fxEchoFb,
+                            &p.fxEchoMix, &p.fxPhone, &p.fxDrive, &p.fxTremHz, &p.fxTremDepth, &p.fxLowpassHz, &p.fxSpace};
   for (int i = 0; i < kValues; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
   s.enabled = gLive.enabled.load(std::memory_order_relaxed);
   s.mute = gLive.mute.load(std::memory_order_relaxed);

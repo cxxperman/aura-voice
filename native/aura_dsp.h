@@ -32,6 +32,20 @@ struct Params {
   float outGainDb = 0.0f;
   float pop = 0.50f; // de-plosive: tames "p"/"b" blasts
   float pitch = 0.0f; // semitones, -12..+12; 0 = untouched
+
+  // Voice effects — the "ready voices" (robot, cave, walkie-talkie…). All neutral at zero.
+  float fxPitch = 0;      // semitones, added to `pitch`
+  float fxRingHz = 0;     // ring-modulator carrier in Hz; 0 = off
+  float fxRingMix = 0;    // 0..1
+  float fxEchoMs = 0;     // echo delay; 0 = off
+  float fxEchoFb = 0;     // 0..0.85
+  float fxEchoMix = 0;    // 0..1
+  float fxPhone = 0;      // 1 = telephone band (420 Hz … 3.2 kHz)
+  float fxDrive = 0;      // 0..1 distortion
+  float fxTremHz = 0;     // tremolo rate; 0 = off
+  float fxTremDepth = 0;  // 0..1
+  float fxLowpassHz = 0;  // muffling low-pass; 0 = off
+  float fxSpace = 0;      // extra room, added to `space`
 };
 
 inline float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
@@ -149,41 +163,155 @@ struct Dynamics {
 };
 
 // Pitch shifter: two taps sweep through a short delay line (which is what changes the pitch)
-// and cross-fade into each other every time one of them has to jump back. No pitch detection,
-// so it never mistracks; costs ~22 ms of latency on average while it is in use.
+// and cross-fade into each other every time one of them has to jump back.
+//
+// The jump is where such shifters go wrong: if the tap lands at an arbitrary place, the two
+// taps play the voice out of phase during the cross-fade and partly cancel — the familiar
+// warble. So each time a tap jumps (it is silent at that instant), it is slid by up to a few
+// milliseconds to the spot where the waveform best matches what the other tap is playing.
+// Costs ~20-28 ms of latency while in use.
 class PitchShifter {
  public:
   void prepare(float sr) {
-    window_ = 0.045f * sr;
+    window_ = 0.040f * sr;
+    search_ = int(0.008f * sr);
+    span_ = int(0.008f * sr);
     size_ = 1;
-    while (float(size_) < window_ + 8) size_ <<= 1;
+    while (size_ < int(window_) + 2 * search_ + span_ + 16) size_ <<= 1;
     buf_.assign(size_t(size_), 0.0f);
     pos_ = 0;
     phase_ = 0;
+    offset_[0] = offset_[1] = 0;
   }
+  void setAligned(bool on) { aligned_ = on; } // off = the plain two-tap shifter, kept for comparison in tests
+
   inline float process(float x, float ratio) {
     buf_[size_t(pos_)] = x;
+    const float before = phase_;
     phase_ += (1.0f - ratio) / window_; // the delay grows to lower the pitch, shrinks to raise it
-    if (phase_ >= 1.0f) phase_ -= 1.0f;
-    if (phase_ < 0.0f) phase_ += 1.0f;
+    bool jumpA = false;
+    if (phase_ >= 1.0f) { phase_ -= 1.0f; jumpA = true; }
+    if (phase_ < 0.0f) { phase_ += 1.0f; jumpA = true; }
     const float other = phase_ >= 0.5f ? phase_ - 0.5f : phase_ + 0.5f;
+    const float otherBefore = before >= 0.5f ? before - 0.5f : before + 0.5f;
+    const bool jumpB = std::fabs(other - otherBefore) > 0.5f;
+    if (aligned_) {
+      if (jumpA) offset_[0] = align(phase_, other, offset_[1]);
+      if (jumpB) offset_[1] = align(other, phase_, offset_[0]);
+    }
     const float w = 0.5f - 0.5f * std::cos(2.0f * kPi * phase_); // silent exactly where the tap jumps
-    const float out = tap(2.0f + phase_ * window_) * w + tap(2.0f + other * window_) * (1.0f - w);
+    const float out = tap(2.0f + phase_ * window_ + offset_[0]) * w + tap(2.0f + other * window_ + offset_[1]) * (1.0f - w);
     pos_ = (pos_ + 1) & (size_ - 1);
     return out;
   }
 
  private:
+  // Where should the tap that just jumped land so that it is in phase with the other one?
+  float align(float jumped, float playing, float playingOffset) const {
+    const int ref = int(2.0f + playing * window_ + playingOffset);
+    const int nominal = int(2.0f + jumped * window_);
+    const bool nearZero = jumped < 0.5f; // at the short end of the delay it can only move further back
+    const int from = nearZero ? 0 : -2 * search_, to = nearZero ? 2 * search_ : 0;
+    float best = -1e30f;
+    int bestOffset = 0;
+    for (int o = from; o <= to; o += 2) {
+      float dot = 0, energy = 1e-9f;
+      for (int k = 0; k < span_; k += 2) {
+        const float c = at(nominal + o + k);
+        dot += c * at(ref + k);
+        energy += c * c;
+      }
+      const float score = dot / std::sqrt(energy);
+      if (score > best) {
+        best = score;
+        bestOffset = o;
+      }
+    }
+    return float(bestOffset);
+  }
+  inline float at(int delay) const { return buf_[size_t((pos_ - delay) & (size_ - 1))]; }
   inline float tap(float delay) const {
-    float at = float(pos_) - delay;
-    if (at < 0) at += float(size_);
-    const int i0 = int(at);
-    const float frac = at - float(i0);
+    float where = float(pos_) - delay;
+    if (where < 0) where += float(size_);
+    const int i0 = int(where);
+    const float frac = where - float(i0);
     return buf_[size_t(i0 & (size_ - 1))] * (1 - frac) + buf_[size_t((i0 + 1) & (size_ - 1))] * frac;
   }
   std::vector<float> buf_;
-  int size_ = 1, pos_ = 0;
-  float window_ = 2160, phase_ = 0;
+  int size_ = 1, pos_ = 0, search_ = 384, span_ = 384;
+  float window_ = 1920, phase_ = 0;
+  float offset_[2] = {0, 0};
+  bool aligned_ = true;
+};
+
+// The effects stage, between the voice chain and the room/limiter. Everything is bypassed
+// (one comparison per sample) until an effect is switched on.
+class Effects {
+ public:
+  void prepare(float sr) {
+    sr_ = sr;
+    echo_.assign(size_t(0.65f * sr) + 8, 0.0f);
+    pos_ = 0;
+    ringPhase_ = tremPhase_ = 0;
+    ringMix_ = echoMix_ = drive_ = tremDepth_ = 0;
+    smooth_ = onePole(0.03f, sr);
+  }
+  void set(const Params& p) {
+    ringStep_ = 2.0f * kPi * p.fxRingHz / sr_;
+    ringTarget_ = p.fxRingHz > 0 ? p.fxRingMix : 0;
+    const float wantEcho = p.fxEchoMs > 0 ? p.fxEchoMix : 0;
+    if (wantEcho > 0 && echoTarget_ <= 0) std::fill(echo_.begin(), echo_.end(), 0.0f); // no stale tail from last time
+    echoTarget_ = wantEcho;
+    echoLen_ = std::clamp(int(p.fxEchoMs * 0.001f * sr_), 1, int(echo_.size()) - 1);
+    echoFb_ = std::min(p.fxEchoFb, 0.85f);
+    const bool phone = p.fxPhone > 0.5f;
+    if (phone && !phone_) { hp_ = Biquad(); lp_ = Biquad(); }
+    phone_ = phone;
+    if (phone_) { hp_.highpass(sr_, 420, 0.8f); lp_.lowpass(sr_, 3200, 0.8f); }
+    const bool muffle = p.fxLowpassHz > 0;
+    if (muffle && !muffle_) low_ = Biquad();
+    muffle_ = muffle;
+    if (muffle_) low_.lowpass(sr_, p.fxLowpassHz, 0.9f);
+    driveTarget_ = p.fxDrive;
+    tremStep_ = 2.0f * kPi * p.fxTremHz / sr_;
+    tremTarget_ = p.fxTremHz > 0 ? p.fxTremDepth : 0;
+    wanted_ = ringTarget_ > 0 || echoTarget_ > 0 || phone_ || muffle_ || driveTarget_ > 0 || tremTarget_ > 0;
+  }
+  inline float process(float x) {
+    if (!wanted_ && ringMix_ < 1e-4f && echoMix_ < 1e-4f && drive_ < 1e-4f && tremDepth_ < 1e-4f) return x;
+    ringMix_ += (ringTarget_ - ringMix_) * smooth_;
+    echoMix_ += (echoTarget_ - echoMix_) * smooth_;
+    drive_ += (driveTarget_ - drive_) * smooth_;
+    tremDepth_ += (tremTarget_ - tremDepth_) * smooth_;
+
+    if (drive_ > 0.001f) x = std::tanh(x * (1.0f + drive_ * 24.0f)) / (1.0f + drive_ * 2.2f); // megaphone grit, level kept sane
+    if (phone_) x = lp_.process(hp_.process(x)) * 1.6f;
+    if (muffle_) x = low_.process(x);
+    if (ringMix_ > 0.001f) { // multiply by a tone: the classic robot
+      if ((ringPhase_ += ringStep_) > 2 * kPi) ringPhase_ -= 2 * kPi;
+      x = x * (1.0f - ringMix_) + x * std::sin(ringPhase_) * ringMix_ * 1.4f;
+    }
+    if (tremDepth_ > 0.001f) {
+      if ((tremPhase_ += tremStep_) > 2 * kPi) tremPhase_ -= 2 * kPi;
+      x *= 1.0f - tremDepth_ * (0.5f + 0.5f * std::sin(tremPhase_));
+    }
+    const int size = int(echo_.size());
+    const float delayed = echo_[size_t((pos_ + size - echoLen_) % size)];
+    echo_[size_t(pos_)] = x + delayed * echoFb_;
+    if (++pos_ >= size) pos_ = 0;
+    return x + delayed * echoMix_;
+  }
+
+ private:
+  float sr_ = 48000, smooth_ = 0;
+  std::vector<float> echo_;
+  int pos_ = 0, echoLen_ = 1;
+  float echoFb_ = 0, echoMix_ = 0, echoTarget_ = 0;
+  float ringStep_ = 0, ringPhase_ = 0, ringMix_ = 0, ringTarget_ = 0;
+  float tremStep_ = 0, tremPhase_ = 0, tremDepth_ = 0, tremTarget_ = 0;
+  float drive_ = 0, driveTarget_ = 0;
+  bool phone_ = false, muffle_ = false, wanted_ = false;
+  Biquad hp_, lp_, low_;
 };
 
 // Freeverb-style room: 8 damped combs + 4 all-passes per side.
@@ -248,6 +376,7 @@ class Chain {
     dyn_.prepare(sr_);
     room_.prepare(sr_);
     pitch_.prepare(sr_);
+    fx_.prepare(sr_);
     delay_.assign(size_t(0.05f * sr_) + 8, 0.0f);
     delayPos_ = 0;
     smooth_ = onePole(0.03f, sr_);
@@ -278,10 +407,12 @@ class Chain {
     // Give back part of what the compressor takes, so "density" thickens rather than just gets louder.
     makeupT_ = dbToGain(0.3f * -thrDb_ * (1.0f - 1.0f / ratio_));
     widthT_ = p.width * 0.55f;
-    revT_ = p.space * 4.5f;
+    revT_ = std::min(p.space + p.fxSpace, 1.6f) * 4.5f;
     gateThr_ = p.clean > 0.01f ? dbToGain(-65.0f + p.clean * 40.0f) : 1e-5f;
     inT_ = dbToGain(p.inGainDb);
-    pitchRatio_ = std::fabs(p.pitch) < 0.01f ? 1.0f : std::pow(2.0f, p.pitch / 12.0f);
+    const float semitones = std::clamp(p.pitch + p.fxPitch, -14.0f, 14.0f);
+    pitchRatio_ = std::fabs(semitones) < 0.01f ? 1.0f : std::pow(2.0f, semitones / 12.0f);
+    fx_.set(p);
     outT_ = dbToGain(p.outGainDb);
   }
 
@@ -319,7 +450,7 @@ class Chain {
       x *= dbToGain(compDb_) * makeup_;
 
       // Exciter: harmonics from the top of the voice, blended back in.
-      const float t = x + exOut_.process(std::tanh(exIn_.process(x) * 6.0f)) * exG_;
+      const float t = fx_.process(x + exOut_.process(std::tanh(exIn_.process(x) * 6.0f)) * exG_);
 
       // Doubler: two slowly drifting taps panned apart.
       delay_[size_t(delayPos_)] = t;
@@ -362,6 +493,7 @@ class Chain {
   Room room_;
   PitchShifter pitch_;
   float pitchRatio_ = 1.0f;
+  Effects fx_;
   std::vector<float> delay_;
   int delayPos_ = 0;
   float phase1_ = 0, phase2_ = 0;
