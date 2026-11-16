@@ -91,7 +91,7 @@ static void runDenoiser() {
   CHECK(d.prepare(48000), "denoiser did not start at 48 kHz");
   CHECK(!aura::Denoiser().prepare(44100), "denoiser must refuse 44.1 kHz");
   const auto t0 = std::chrono::steady_clock::now();
-  for (size_t at = 0; at < x.size(); at += 441) d.process(x.data() + at, int(std::min<size_t>(441, x.size() - at)), 1.0f);
+  for (size_t at = 0; at < x.size(); at += 441) d.process(x.data() + at, int(std::min<size_t>(441, x.size() - at)), 1.0f, 1.0f);
   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 
   bool finite = true;
@@ -105,6 +105,20 @@ static void runDenoiser() {
   CHECK(quietOut < quietIn - 10.0f, "noise in pauses only dropped by %.1f dB", quietIn - quietOut);
   CHECK(speechOut > speechIn - 9.0f, "denoiser ate the voice (%.1f dB)", speechOut - speechIn);
   CHECK(ms < 600.0, "denoiser too slow: %.0f ms for 3 s", ms);
+
+  // Maximum strength adds the voice gate: pauses must drop further, and the voice must not be chopped.
+  std::vector<float> y = in;
+  aura::Denoiser g;
+  g.prepare(48000);
+  for (size_t at = 0; at < y.size(); at += 480) {
+    g.process(y.data() + at, int(std::min<size_t>(480, y.size() - at)), aura::denoiseAmount(1.0f), aura::denoiseGateFloor(1.0f));
+  }
+  const float gatedSpeech = rmsDb(y, a, b), gatedQuiet = rmsDb(y, tail, in.size());
+  std::printf("%-22s sr=48000  speech %6.1f -> %6.1f dB | pause %6.1f -> %6.1f dB\n", "  + voice gate", speechIn, gatedSpeech, quietIn, gatedQuiet);
+  CHECK(gatedQuiet <= quietOut + 0.5f, "voice gate made pauses louder (%.1f vs %.1f dB)", gatedQuiet, quietOut);
+  CHECK(gatedSpeech > speechOut - 3.0f, "voice gate chopped the voice (%.1f dB vs %.1f dB)", gatedSpeech, speechOut);
+  CHECK(aura::denoiseAmount(0.31f) > 0.49f && aura::denoiseAmount(0.31f) < 0.51f && aura::denoiseGateFloor(0.5f) == 1.0f,
+        "strength mapping is off");
 }
 
 int main() {
@@ -118,7 +132,8 @@ int main() {
     run("everything at maximum", sr, max, false);
   }
 
-  const aura::Settings s = aura::parseSettings("enabled=0\r\nwarmth=80\r\nfoo=1\r\nair=abc\r\ningain=99\r\n=5\r\nwidth=-3\r\n");
+  const aura::Settings s = aura::parseSettings("enabled=0\r\nwarmth=80\r\nfoo=1\r\nair=abc\r\ningain=99\r\n=5\r\nwidth=-3\r\nns=70\r\nmute=1\r\npop=250\r\n");
+  CHECK(std::fabs(s.nsStrength - 0.7f) < 1e-5f && s.mute && s.params.pop == 1.0f, "ns/mute/pop were not parsed");
   CHECK(!s.enabled, "enabled=0 was not parsed");
   CHECK(std::fabs(s.params.warmth - 0.8f) < 1e-5f, "warmth=%f", s.params.warmth);
   CHECK(std::fabs(s.params.air - aura::Params().air) < 1e-5f, "garbage changed air to %f", s.params.air);

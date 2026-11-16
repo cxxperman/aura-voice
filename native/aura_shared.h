@@ -29,7 +29,8 @@ inline std::wstring dataDir() {
 
 struct Settings {
   bool enabled = true;
-  bool noiseSuppression = false; // neural denoiser in front of the chain
+  bool mute = false;      // hard mute of the microphone, wins over everything
+  float nsStrength = 0;   // neural noise suppression, 0 = off .. 1 = maximum
   Params params;
 };
 
@@ -52,7 +53,9 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
     if (end == line.c_str() + eq + 1 || v != v) continue;
 
     if (key == "enabled") s.enabled = v > 0.5;
-    else if (key == "ns") s.noiseSuppression = v > 0.5;
+    else if (key == "mute") s.mute = v > 0.5;
+    else if (key == "ns") s.nsStrength = clamp(v / 100, 0, 1);
+    else if (key == "pop") s.params.pop = clamp(v / 100, 0, 1);
     else if (key == "warmth") s.params.warmth = clamp(v / 100, 0, 1);
     else if (key == "clarity") s.params.clarity = clamp(v / 100, 0, 1);
     else if (key == "air") s.params.air = clamp(v / 100, 0, 1);

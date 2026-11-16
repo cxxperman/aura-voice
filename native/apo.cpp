@@ -12,6 +12,7 @@
 #include <xmmintrin.h>
 
 #include <atomic>
+#include <cstdio>
 #include <new>
 #include <vector>
 
@@ -21,31 +22,39 @@ std::atomic<long> gObjects{0};
 
 // ───── Live settings: written by the watcher thread, read by the real-time thread ─────
 
+constexpr int kValues = 13;
+
 struct Live {
   std::atomic<bool> enabled{true};
-  std::atomic<bool> noiseSuppression{false};
-  std::atomic<float> v[11];
+  std::atomic<bool> mute{false};
+  std::atomic<float> v[kValues];
   std::atomic<int> sampleRate{0}, channels{0};
   std::atomic<unsigned> blocks{0};
+  // Meters for the window: the audio thread raises them, the watcher reads and resets.
+  std::atomic<float> peakIn{0}, peakOut{0}, reduction{0}, voice{0};
 } gLive;
+
+inline void raise(std::atomic<float>& meter, float value) {
+  if (value > meter.load(std::memory_order_relaxed)) meter.store(value, std::memory_order_relaxed);
+}
 
 void store(const aura::Settings& s) {
   const aura::Params& p = s.params;
-  const float values[11] = {p.warmth, p.clarity, p.air, p.density, p.width, p.space,
-                            p.clean, p.deess, p.autoLevel, p.inGainDb, p.outGainDb};
-  for (int i = 0; i < 11; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
+  const float values[kValues] = {p.warmth, p.clarity, p.air, p.density, p.width, p.space, p.clean,
+                                 p.deess, p.autoLevel, p.inGainDb, p.outGainDb, p.pop, s.nsStrength};
+  for (int i = 0; i < kValues; i++) gLive.v[i].store(values[i], std::memory_order_relaxed);
   gLive.enabled.store(s.enabled, std::memory_order_relaxed);
-  gLive.noiseSuppression.store(s.noiseSuppression, std::memory_order_relaxed);
+  gLive.mute.store(s.mute, std::memory_order_relaxed);
 }
 
 aura::Settings load() {
   aura::Settings s;
   aura::Params& p = s.params;
-  float* fields[11] = {&p.warmth, &p.clarity, &p.air, &p.density, &p.width, &p.space,
-                       &p.clean, &p.deess, &p.autoLevel, &p.inGainDb, &p.outGainDb};
-  for (int i = 0; i < 11; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
+  float* fields[kValues] = {&p.warmth, &p.clarity, &p.air, &p.density, &p.width, &p.space, &p.clean,
+                            &p.deess, &p.autoLevel, &p.inGainDb, &p.outGainDb, &p.pop, &s.nsStrength};
+  for (int i = 0; i < kValues; i++) *fields[i] = gLive.v[i].load(std::memory_order_relaxed);
   s.enabled = gLive.enabled.load(std::memory_order_relaxed);
-  s.noiseSuppression = gLive.noiseSuppression.load(std::memory_order_relaxed);
+  s.mute = gLive.mute.load(std::memory_order_relaxed);
   return s;
 }
 
@@ -64,10 +73,13 @@ bool readSettings(const std::wstring& path) {
 }
 
 void writeStatus(const std::wstring& path) {
-  char text[160];
-  const int len = wsprintfA(text, "alive=1\r\nsr=%d\r\nch=%d\r\nblocks=%u\r\nenabled=%d\r\nns=%d\r\n", gLive.sampleRate.load(),
-                            gLive.channels.load(), gLive.blocks.load(), gLive.enabled.load() ? 1 : 0,
-                            gLive.noiseSuppression.load() ? 1 : 0);
+  auto db = [](float peak) { return 20.0 * std::log10(double(peak) + 1e-6); };
+  char text[256];
+  const int len = std::snprintf(
+      text, sizeof(text), "alive=1\r\nsr=%d\r\nch=%d\r\nblocks=%u\r\nenabled=%d\r\nmute=%d\r\nin=%.1f\r\nout=%.1f\r\ngr=%.1f\r\nvoice=%.2f\r\n",
+      gLive.sampleRate.load(), gLive.channels.load(), gLive.blocks.load(), gLive.enabled.load() ? 1 : 0,
+      gLive.mute.load() ? 1 : 0, db(gLive.peakIn.exchange(0)), db(gLive.peakOut.exchange(0)),
+      -double(gLive.reduction.exchange(0)), double(gLive.voice.exchange(0)));
   const HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
   if (f == INVALID_HANDLE_VALUE) return;
@@ -92,8 +104,8 @@ DWORD WINAPI watch(void*) {
         CompareFileTime(&info.ftLastWriteTime, &seen) != 0 && readSettings(settings)) {
       seen = info.ftLastWriteTime;
     }
-    if (tick % 5 == 0) writeStatus(status);
-    if (WaitForSingleObject(gWatchStop, 200) == WAIT_OBJECT_0) break;
+    writeStatus(status); // every 120 ms: it doubles as the level meter feed
+    if (WaitForSingleObject(gWatchStop, 120) == WAIT_OBJECT_0) break;
   }
   DeleteFileW(status.c_str());
   return 0;
@@ -268,8 +280,14 @@ class AuraApo final : public INonDelegatingUnknown,
 
     const aura::Settings s = load();
     const float target = s.enabled ? 1.0f : 0.0f;
+    float peakIn = 0;
+    for (UINT32 i = 0; i < frames * ch; i++) peakIn = std::max(peakIn, std::fabs(src[i]));
+    raise(gLive.peakIn, peakIn);
+
     if (frames > capacity_ || (mix_ == 0.0f && target == 0.0f)) {
       if (dst != src) memcpy(dst, src, size_t(frames) * ch * sizeof(float));
+      applyMute(dst, frames * ch, s.mute);
+      raise(gLive.peakOut, muteGain_ * peakIn);
       return;
     }
 
@@ -281,7 +299,10 @@ class AuraApo final : public INonDelegatingUnknown,
       for (UINT32 c = 0; c < ch; c++) sum += src[i * ch + c];
       mono_[i] = sum / float(ch);
     }
-    if (s.noiseSuppression && denoise_.ready()) denoise_.process(mono_.data(), int(frames), 1.0f);
+    if (s.nsStrength > 0.005f && denoise_.ready()) {
+      denoise_.process(mono_.data(), int(frames), aura::denoiseAmount(s.nsStrength), aura::denoiseGateFloor(s.nsStrength));
+      raise(gLive.voice, denoise_.voiceProbability());
+    }
     chain_.setParams(s.params);
     chain_.process(mono_.data(), left_.data(), right_.data(), int(frames));
 
@@ -297,6 +318,11 @@ class AuraApo final : public INonDelegatingUnknown,
       }
     }
     mix_ = target;
+    applyMute(dst, frames * ch, s.mute);
+    float peakOut = 0;
+    for (UINT32 i = 0; i < frames * ch; i++) peakOut = std::max(peakOut, std::fabs(dst[i]));
+    raise(gLive.peakOut, peakOut);
+    raise(gLive.reduction, -chain_.gainReductionDb());
     gLive.blocks.fetch_add(1, std::memory_order_relaxed);
     _mm_setcsr(csr);
   }
@@ -304,6 +330,21 @@ class AuraApo final : public INonDelegatingUnknown,
   STDMETHODIMP_(UINT32) CalcOutputFrames(UINT32 inputFrames) override { return inputFrames; }
 
  private:
+  // Fade to silence and back over one buffer, so muting never clicks.
+  void applyMute(float* samples, UINT32 count, bool mute) {
+    const float target = mute ? 0.0f : 1.0f;
+    if (muteGain_ == target) {
+      if (mute) memset(samples, 0, size_t(count) * sizeof(float));
+      return;
+    }
+    const float step = (target - muteGain_) / float(count);
+    for (UINT32 i = 0; i < count; i++) {
+      muteGain_ += step;
+      samples[i] *= muteGain_;
+    }
+    muteGain_ = target;
+  }
+
   static HRESULT formatSupported(IAudioMediaType* opposite, IAudioMediaType* requested, IAudioMediaType** supported) {
     if (!requested || !supported) return E_POINTER;
     *supported = nullptr;
@@ -335,6 +376,7 @@ class AuraApo final : public INonDelegatingUnknown,
   UINT32 channels_ = 2;
   UINT32 capacity_ = 0;
   float mix_ = 1.0f;
+  float muteGain_ = 1.0f;
   aura::Chain chain_;
   aura::Denoiser denoise_;
   std::vector<float> mono_, left_, right_;

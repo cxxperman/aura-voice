@@ -30,6 +30,7 @@ struct Params {
   float autoLevel = 1.0f;
   float inGainDb = 0.0f;
   float outGainDb = 0.0f;
+  float pop = 0.50f; // de-plosive: tames "p"/"b" blasts
 };
 
 inline float dbToGain(float db) { return std::pow(10.0f, db / 20.0f); }
@@ -88,7 +89,8 @@ struct Dynamics {
   bool open = false;
   float rms = 0.01f, ag = 1;
   float lp = 0, envHi = 0, dg = 1;
-  float envRel = 0, gAtt = 0, gRel = 0, holdN = 0, rmsA = 0, agA = 0, lpA = 0, hiRel = 0;
+  float lo = 0, envLo = 0, pg = 1;
+  float envRel = 0, gAtt = 0, gRel = 0, holdN = 0, rmsA = 0, agA = 0, lpA = 0, hiRel = 0, loA = 0, loRel = 0;
 
   void prepare(float sr) {
     envRel = std::exp(-1.0f / (0.05f * sr));
@@ -99,9 +101,11 @@ struct Dynamics {
     agA = onePole(1.5f, sr);
     lpA = 1.0f - std::exp(-2.0f * kPi * std::min(5200.0f, 0.4f * sr) / sr);
     hiRel = std::exp(-1.0f / (0.03f * sr));
+    loA = 1.0f - std::exp(-2.0f * kPi * 100.0f / sr);
+    loRel = std::exp(-1.0f / (0.06f * sr));
   }
 
-  inline float process(float x, float thr, float deess, bool autoLevel) {
+  inline float process(float x, float thr, float deess, bool autoLevel, float pop) {
     const float a = std::fabs(x);
     env = std::max(a, env * envRel);
 
@@ -122,6 +126,15 @@ struct Dynamics {
       ag += (1.0f - ag) * agA;
     }
     x *= g * ag;
+
+    // De-plosive: the band under ~100 Hz sits below most voices' pitch, so a burst there is
+    // breath hitting the capsule, not speech. Duck just that band while it lasts.
+    lo += (x - lo) * loA;
+    envLo = std::max(std::fabs(lo), envLo * loRel);
+    const float popThr = 0.04f;
+    const float tp = (pop > 0 && envLo > popThr) ? std::pow(popThr / envLo, pop * 0.9f) : 1.0f;
+    pg += (tp - pg) * (tp < pg ? 0.05f : 0.004f);
+    x = (x - lo) + lo * pg;
 
     // De-esser: split at ~5 kHz, duck only the top band when sibilance spikes.
     lp += (x - lp) * lpA;
@@ -251,7 +264,7 @@ class Chain {
       revG_ += (revT_ - revG_) * smooth_;
 
       float x = hpf_.process(in[n] * inG_);
-      x = dyn_.process(x, gateThr_, deess, autoLevel);
+      x = dyn_.process(x, gateThr_, deess, autoLevel, params_.pop);
       x = air_.process(pres_.process(low_.process(mud_.process(x))));
 
       // Soft-knee feed-forward compressor, no look-ahead (adds no latency).
