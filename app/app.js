@@ -111,6 +111,7 @@ const DEFAULTS = {
   autoUpdate: true, // ask GitHub for a newer release at start
   voiceLevels: null, // third-octave spectrum of the user's own voice (dB), measured by auto-setup
   autoPreset: null, // { v, eq, about } — the sound auto-setup designed for this voice
+  voiceF0: 0, // the user's speaking pitch, Hz, measured by auto-setup: voices that mean "another person" aim from it
   fx: 'none', // ready voice, see VOICES
   fxCustom: { pitch: 0, formant: 0, robot: 0, drive: 0, echo: 0, space: 0, trem: 0, phone: 0 },
   fxKeys: {}, // voice id → global hotkey
@@ -906,7 +907,35 @@ function startSample(mono) {
   renderSample();
 }
 const sampleBtn = $('#sample');
+// The fitting room: the user's own phrase loops, and every voice clicked is heard on it at once —
+// no talking, no hearing oneself late through the headphones.
+function renderFit() {
+  const on = engine.sampleMode;
+  const btn = $('#fitBtn');
+  btn.textContent = on ? 'Закончить' : 'Примерить';
+  btn.classList.toggle('live', on);
+  $('#fitText').textContent = on
+    ? 'Играет ваша запись. Нажимайте голоса — она сразу зазвучит по-новому. Кнопка «Оригинал» вверху возвращает ваш настоящий голос, пока её держите.'
+    : `Ваша запись заиграет по кругу, а голоса будут меняться на ней по нажатию.${state.voiceF0 ? ` Девушка, Парень, Ребёнок, Великан и Демон подстроены под высоту вашего голоса (${state.voiceF0} Гц).` : ' После «Автонастройки» голоса подстроятся под высоту вашего голоса.'}`;
+}
+$('#fitBtn').addEventListener('click', async () => {
+  if (recording || tuning) return;
+  if (!engine.running) return flash('Сначала включите сферу', true);
+  if (engine.sampleMode) {
+    engine.stopSample();
+    sampleRaw = sampleRendered = null;
+    syncBypass();
+    pushSystem();
+    renderSample();
+    liveStatus();
+    return;
+  }
+  const stored = sys.installed && (await window.auraSystem.renderAvailable()) ? await window.auraSystem.loadTake() : null;
+  if (stored) startSample(new Float32Array(stored));
+  else sampleBtn.click(); // nothing recorded yet: record six seconds first
+});
 function renderSample() {
+  renderFit();
   sampleBtn.classList.toggle('live', engine.sampleMode || recording);
   if (!recording) sampleBtn.textContent = engine.sampleMode ? 'Остановить пробу' : 'Записать пробу';
 }
@@ -934,6 +963,7 @@ sampleBtn.addEventListener('click', async () => {
           const d = b.getChannelData(c);
           for (let i = 0; i < mono.length; i++) mono[i] += d[i] / b.numberOfChannels;
         }
+        window.auraSystem.saveTake(mono.slice().buffer);
         startSample(mono);
       } else {
         engine.playSample();
@@ -1301,15 +1331,15 @@ const SYMBOLS = {
 };
 const VOICES = {
   none: { name: 'Обычный голос', hint: 'Без эффекта', icon: 'mic', color: '#8e8e93', p: {} },
-  girl: { name: 'Девушка', hint: 'Выше и легче тембром', icon: 'person', color: '#ff375f', p: { fxpitch: 5, fxnatural: 1, fxformant: 2.8 } },
-  guy: { name: 'Парень', hint: 'Ниже и плотнее тембром', icon: 'person', color: '#0a84ff', p: { fxpitch: -4, fxnatural: 1, fxformant: -2.4 } },
-  kid: { name: 'Ребёнок', hint: 'Высокий и маленький', icon: 'child', color: '#ff9f0a', p: { fxpitch: 8, fxnatural: 1, fxformant: 4 } },
+  girl: { name: 'Девушка', hint: 'Выше и легче тембром', icon: 'person', color: '#ff375f', p: { fxpitch: 5, fxnatural: 1, fxformant: 2.8 }, fit: [215, 0.5] },
+  guy: { name: 'Парень', hint: 'Ниже и плотнее тембром', icon: 'person', color: '#0a84ff', p: { fxpitch: -4, fxnatural: 1, fxformant: -2.4 }, fit: [105, 0.55] },
+  kid: { name: 'Ребёнок', hint: 'Высокий и маленький', icon: 'child', color: '#ff9f0a', p: { fxpitch: 8, fxnatural: 1, fxformant: 4 }, fit: [300, 0.45] },
   higher: { name: 'Выше', hint: 'Тот же человек, тоньше', icon: 'up', color: '#30b0c7', p: { fxpitch: 3, fxnatural: 1 } },
   lower: { name: 'Ниже', hint: 'Тот же человек, глубже', icon: 'down', color: '#5e5ce6', p: { fxpitch: -3, fxnatural: 1 } },
   helium: { name: 'Гелий', hint: 'Как после шарика', icon: 'balloon', color: '#ff453a', p: { fxpitch: 7 } },
   chipmunk: { name: 'Бурундук', hint: 'Совсем тоненький', icon: 'note', color: '#a2845e', p: { fxpitch: 11 } },
-  giant: { name: 'Великан', hint: 'Низкий и большой', icon: 'mountain', color: '#34c759', p: { fxpitch: -6 } },
-  demon: { name: 'Демон', hint: 'Низко, с хрипом и залом', icon: 'flame', color: '#d70015', p: { fxpitch: -8, fxdrive: 30, fxspace: 50 } },
+  giant: { name: 'Великан', hint: 'Низкий и большой', icon: 'mountain', color: '#34c759', p: { fxpitch: -6 }, fit: [75] },
+  demon: { name: 'Демон', hint: 'Низко, с хрипом и залом', icon: 'flame', color: '#d70015', p: { fxpitch: -8, fxdrive: 30, fxspace: 50 }, fit: [68] },
   robot: { name: 'Робот', hint: 'Металлический, ровный', icon: 'cpu', color: '#64748b', p: { fxring: 55, fxringmix: 85 } },
   alien: { name: 'Пришелец', hint: 'Звенящий, не отсюда', icon: 'star', color: '#30d158', p: { fxring: 190, fxringmix: 60, fxpitch: 3 } },
   phone: { name: 'Телефон', hint: 'Узкая полоса, как в трубке', icon: 'phone', color: '#34c759', p: { fxphone: 1 } },
@@ -1356,8 +1386,21 @@ function customFx() {
     fxphone: c.phone ? 1 : 0,
   };
 }
+// "A girl", "a guy", "a giant" are places on the pitch scale, not distances: from a low voice the
+// way to a girl's is long, from a high one short. Once auto-setup has measured the speaking pitch,
+// these voices aim at their place from it (and move the timbre in proportion); until then they
+// use their fixed step.
+function voiceParams(id) {
+  const voice = VOICES[id] || VOICES.none;
+  if (!voice.fit || !state.voiceF0) return voice.p;
+  const [target, timbreShare] = voice.fit;
+  const st = clamp(Math.round(12 * Math.log2(target / state.voiceF0)), -12, 12);
+  const p = { ...voice.p, fxpitch: st };
+  if (voice.p.fxnatural) p.fxformant = clamp(Math.round(st * timbreShare * 10) / 10, -5, 5);
+  return p;
+}
 function fxValues() {
-  return { ...FX_ZERO, ...(state.fx === 'custom' ? customFx() : (VOICES[state.fx] || VOICES.none).p) };
+  return { ...FX_ZERO, ...(state.fx === 'custom' ? customFx() : voiceParams(state.fx)) };
 }
 function selectVoice(id) {
   state.fx = VOICES[id] ? id : 'none';
@@ -1948,6 +1991,8 @@ tuneBtn.addEventListener('click', async () => {
   }
   // 3. The voice: its pitch, how much its level wanders, how bright it is — and a sound built on that.
   const f0 = take ? voicePitch(take) : 0;
+  if (f0) state.voiceF0 = Math.round(f0);
+  if (take) window.auraSystem.saveTake(take.slice().buffer); // the effects page tries voices on it
   const active = levels.filter((l) => l > noise + 12);
   const spread = active.length > 10 ? percentile(active, 0.9) - percentile(active, 0.3) : 8;
   state.autoPreset = designVoice({ f0, snr, spread, bright });
@@ -2551,6 +2596,7 @@ async function boot() {
   renderPreset();
   renderSliders();
   showEqTab(state.eqTab);
+  renderFit();
   renderPower();
   rafId = requestAnimationFrame(frame);
 

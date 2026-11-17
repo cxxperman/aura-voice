@@ -486,6 +486,8 @@ kbd.failed { background: var(--red); color: #fff; }
 .file-drop .pill { margin-top: 8px; }
 .take { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 18px; }
 .take b { display: block; font-weight: 600; }
+.fit { margin: 6px 0 4px; }
+.fit small { max-width: none; }
 
 /* ───────── Settings page ───────── */
 .system { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 14px; }

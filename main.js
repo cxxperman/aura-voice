@@ -379,6 +379,26 @@ function runRender(inFile, outFile, settings) {
   });
 }
 let renderSeq = 0;
+// The user's own recorded phrase, kept between sessions: the effects page tries voices on it.
+const takeFile = () => path.join(app.getPath('userData'), 'take.f32');
+ipcMain.handle('take:save', (_e, pcm) => {
+  const bytes = Buffer.from(pcm instanceof ArrayBuffer ? pcm : []);
+  if (!bytes.length || bytes.length % 4 || bytes.length > 4 * 48000 * 30) return false;
+  try {
+    fs.writeFileSync(takeFile(), bytes);
+    return true;
+  } catch {
+    return false;
+  }
+});
+ipcMain.handle('take:load', () => {
+  try {
+    const b = fs.readFileSync(takeFile());
+    return b.length && b.length % 4 === 0 ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : null;
+  } catch {
+    return null;
+  }
+});
 ipcMain.handle('render:available', () => fs.existsSync(renderTool()));
 ipcMain.handle('render:sample', async (_e, pcm, settings) => {
   const bytes = Buffer.from(pcm instanceof ArrayBuffer ? pcm : pcm?.buffer || []);

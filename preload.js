@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('auraSystem', {
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  saveTake: (pcm) => ipcRenderer.invoke('take:save', pcm),
+  loadTake: () => ipcRenderer.invoke('take:load'),
   renderAvailable: () => ipcRenderer.invoke('render:available'),
   renderSample: (pcm, settings) => ipcRenderer.invoke('render:sample', pcm, settings),
   renderBegin: (name) => ipcRenderer.invoke('render:begin', name),
