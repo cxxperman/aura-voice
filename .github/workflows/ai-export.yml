@@ -24,7 +24,7 @@ jobs:
       - name: Python packages
         run: |
           pip install --quiet torch==2.1.2 --index-url https://download.pytorch.org/whl/cpu
-          pip install --quiet numpy==1.23.5 onnx==1.15.0 onnxruntime==1.17.1
+          pip install --quiet numpy==1.23.5 scipy==1.11.4 onnx==1.15.0 onnxruntime==1.17.1
       - name: Base models
         run: |
           mkdir -p base out
