@@ -223,12 +223,16 @@ const hzText = (f) => (f >= 1000 ? `${String(f / 1000).replace('.', ',')} кГц
 const dbText = (g) => `${g > 0 ? '+' : '−'}${String(Math.abs(g)).replace('.', ',')} дБ`;
 
 // Everything the module (or the file renderer, which is the same chain) needs to know.
-function systemLines(enabled, live = true) {
+// `clean`: for the neural voice. The network re-synthesises the timbre, so tone shaping ahead of it
+// is lost; what does reach the listener is a clean, even input. With `clean`, only that is kept —
+// noise suppression, the low cut, hum filter, pause threshold, levelling — and the equalizer,
+// harmonics, room, width and effects are left out.
+function systemLines(enabled, live = true, clean = false) {
   const v = state.v;
   return [
     `enabled=${enabled ? 1 : 0}`,
     'warmth=0', 'clarity=0', 'air=0', // the tone is in the frequency bands (m…) now
-    ...['density', 'multiband', 'sat', 'excite', 'deess', 'space', 'width', 'pitch'].map((k) => `${k}=${v[k] ?? 0}`),
+    ...['density', 'multiband', 'sat', 'excite', 'deess', 'space', 'width', 'pitch'].map((k) => `${k}=${clean && k !== 'density' ? 0 : v[k] ?? 0}`),
     `auto=${state.auto ? 1 : 0}`,
     `clean=${state.g.clean}`,
     `ns=${state.g.ns}`,
@@ -239,11 +243,11 @@ function systemLines(enabled, live = true) {
     `loud=${state.loud || 0}`,
     `dehum=${state.dehum ? 1 : 0}`,
     ...(live ? [`ailive=${aiLiveOn ? 1 : 0}`] : []), // the module plays the voice the window converts
-    ...Object.entries(fxValues()).map(([k, value]) => `${k}=${value}`),
+    ...Object.entries(clean ? FX_ZERO : fxValues()).map(([k, value]) => `${k}=${value}`),
     `ingain=${state.inGain}`,
     `outgain=${state.outGain}`,
     `michp=${eqBands().hp}`,
-    ...Array.from({ length: 14 }, (_, i) => eqBands().bands[i] || [0, 0, 0]).flatMap(([f, g, q], i) => {
+    ...Array.from({ length: 14 }, (_, i) => (clean ? null : eqBands().bands[i]) || [0, 0, 0]).flatMap(([f, g, q], i) => {
       const k = '123456789abcde'[i];
       return [`m${k}f=${f}`, `m${k}g=${g}`, `m${k}q=${q}`];
     }),
@@ -252,7 +256,7 @@ function systemLines(enabled, live = true) {
 function pushSystem() {
   if (!sys.installed || TEST) return;
   // Off, "hold to compare" and sample recording all want the untouched microphone.
-  window.auraSystem.write(systemLines(state.on && !holdingOriginal && !recording));
+  window.auraSystem.write(systemLines(state.on && !holdingOriginal && !recording, true, aiLiveOn)); // live AI voice: the module feeds the network the clean voice
 }
 
 function applyAll() {
@@ -2496,12 +2500,12 @@ $('#aiPitch').addEventListener('input', (e) => {
   save();
   if (aiLiveOn) window.auraSystem.aiLiveSet(state.aiPitch, state.aiSpeaker || 0);
 });
-// The neural voice sits on top of the voice settings, as it does live: the recording first goes
-// through the same chain as the microphone (noise suppression, equalizer, compression, loudness),
-// and what comes out of that is what the network hears.
+// The neural voice sits on top of the cleaning part of the voice settings, as it does live: the
+// recording first goes through the microphone's chain with tone shaping left out (see
+// systemLines), and what comes out of that is what the network hears.
 async function throughVoiceSettings(mono) {
   if (!(await window.auraSystem.renderAvailable())) return mono;
-  const out = await window.auraSystem.renderSample(mono.slice().buffer, systemLines(true, false));
+  const out = await window.auraSystem.renderSample(mono.slice().buffer, systemLines(true, false, true));
   if (!out) return mono;
   const stereo = new Float32Array(out);
   const voice = new Float32Array(stereo.length >> 1);
