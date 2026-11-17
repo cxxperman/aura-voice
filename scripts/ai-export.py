@@ -63,7 +63,7 @@ def check(out_path, rate, speakers):
     print(out_path, "initializers:", len(inits), "| named like the weights:", sum(1 for n in inits if not n.startswith("onnx::")), "| first:", inits[:6])
     s = ort.InferenceSession(out_path, providers=["CPUExecutionProvider"])
     print(" inputs:", [(i.name, i.type, i.shape) for i in s.get_inputs()], "| outputs:", [(o.name, o.shape) for o in s.get_outputs()])
-    T = 300
+    T = 200  # the traced graph fixes the length it was exported with: two seconds
     rng = np.random.default_rng(1)
     feed = {
         "phone": rng.standard_normal((1, T, 768)).astype(np.float32) * 0.3,
