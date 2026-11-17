@@ -138,31 +138,32 @@ function describeVoice(session) {
   };
 }
 
-// One stretch of audio (16 kHz in) → { audio, rate }. `st` moves the pitch in semitones.
-async function convertChunk(ctx, x16, st) {
+// The voice model is always run on stretches of exactly two seconds (200 frames). Models written
+// by RVC's own exporter accept no other length — the length they were traced with is fixed in
+// them — and for the others it costs nothing; a live mode works in such stretches anyway.
+const FRAMES = 200;
+const WINDOW16 = 400 + (FRAMES / 2 - 1) * 320; // 16 kHz samples that give the encoder exactly FRAMES / 2 frames
+
+// One two-second stretch → { audio, rate }. `f0` is its pitch track (FRAMES values, already shifted).
+async function convertWindow(ctx, x16, f0, speaker) {
   const { ort, encoder, voice } = ctx;
   const enc = await encoder.run({ [encoder.inputNames[0]]: new ort.Tensor('float32', x16, [1, 1, x16.length]) });
-  const emb = enc[encoder.outputNames[0]]; // [1, T, C] at 50 a second
-  const T0 = emb.dims[1], C = emb.dims[2];
-  const info = describeVoice(voice);
+  const emb = enc[encoder.outputNames[0]]; // [1, T0, C] at 50 a second
+  const T0 = emb.dims[1], C = emb.dims[2], T = FRAMES;
+  const info = ctx.info || (ctx.info = describeVoice(voice));
   if (!info.ok) throw new Error('unsupported voice model');
   if (info.dim && info.dim !== C) throw new Error(`voice model wants ${info.dim}-dimensional features, the encoder gives ${C}`);
-  const T = T0 * 2;
   const feats = new Float32Array(T * C); // every frame twice: the voice model runs at 100 a second
-  for (let t = 0; t < T0; t++) {
-    const row = emb.data.subarray(t * C, (t + 1) * C);
-    feats.set(row, 2 * t * C);
-    feats.set(row, (2 * t + 1) * C);
+  for (let t = 0; t < T; t++) {
+    const from = Math.min(T0 - 1, t >> 1);
+    feats.set(emb.data.subarray(from * C, (from + 1) * C), t * C);
   }
-  const f0 = pitchTrack(x16, T);
-  const k = Math.pow(2, st / 12);
-  for (let i = 0; i < T; i++) f0[i] *= k;
   const len = new ort.Tensor('int64', BigInt64Array.from([BigInt(T)]), [1]);
-  const speaker = new ort.Tensor('int64', BigInt64Array.from([0n]), [1]);
+  const who = new ort.Tensor('int64', BigInt64Array.from([BigInt(speaker)]), [1]);
   const featTensor = info.half ? new ort.Tensor('float16', Uint16Array.from(feats, toHalf), [1, T, C]) : new ort.Tensor('float32', feats, [1, T, C]);
   const feed = info.layout === 'rvc'
-    ? { phone: featTensor, phone_lengths: len, ds: speaker, rnd: new ort.Tensor('float32', gauss(192 * T), [1, 192, T]) }
-    : { feats: featTensor, p_len: len, sid: speaker };
+    ? { phone: featTensor, phone_lengths: len, ds: who, rnd: new ort.Tensor('float32', gauss(192 * T), [1, 192, T]) }
+    : { feats: featTensor, p_len: len, sid: who };
   if (info.pitched) {
     feed.pitch = new ort.Tensor('int64', coarsePitch(f0), [1, T]);
     feed.pitchf = new ort.Tensor('float32', f0, [1, T]);
@@ -172,24 +173,36 @@ async function convertChunk(ctx, x16, st) {
   const audio = out.type === 'float16' ? Float32Array.from(out.data, fromHalf) : Float32Array.from(out.data);
   // The model's sample rate shows in how much audio it made for T frames of 10 ms.
   const per = audio.length / T;
-  const rate = [32000, 40000, 44100, 48000].reduce((a, b) => (Math.abs(b / 100 - per) < Math.abs(a / 100 - per) ? b : a));
+  const rate = [32000, 40000, 44100, 48000].reduce((p, q) => (Math.abs(q / 100 - per) < Math.abs(p / 100 - per) ? q : p));
   return { audio, rate };
 }
 
-// A whole recording (mono, 48 kHz): in pieces of 12 s with a second of context either side, so
-// long files do not need the memory of one giant run and the joins fall inside the context.
-async function convert(ctx, mono48, st = 0, onProgress = () => {}) {
+// A whole recording (mono, 48 kHz). Two-second stretches, each starting 1.6 s after the last,
+// cross-faded over the 0.4 s they share. The pitch is tracked once over the whole recording, so
+// its octave correction sees all of the voice, not two seconds of it.
+async function convert(ctx, mono48, st = 0, onProgress = () => {}, speaker = 0) {
   const x16 = resample(mono48, 48000, 16000);
-  const piece = 16000 * 12, pad = 16000;
+  const total = Math.ceil(x16.length / 160);
+  const f0 = pitchTrack(x16, total);
+  const k = Math.pow(2, st / 12);
+  for (let i = 0; i < total; i++) f0[i] *= k;
+  const hop = 160, overlap = (FRAMES - hop) * 480; // frames; 48 kHz samples
   const out = new Float32Array(mono48.length);
-  for (let start = 0; start < x16.length; start += piece) {
-    const a = Math.max(0, start - pad), b = Math.min(x16.length, start + piece + pad);
-    const { audio, rate } = await convertChunk(ctx, x16.subarray(a, b), st);
+  for (let frame = 0, first = true; frame < total; frame += hop, first = false) {
+    const seg = new Float32Array(WINDOW16);
+    seg.set(x16.subarray(frame * 160, frame * 160 + WINDOW16));
+    const pitch = new Float32Array(FRAMES);
+    pitch.set(f0.subarray(frame, frame + FRAMES));
+    const { audio, rate } = await convertWindow(ctx, seg, pitch, speaker);
     const y = resample(audio, rate, 48000);
-    const skip = (start - a) * 3, want = Math.min(piece, x16.length - start) * 3; // 16 k → 48 k positions
-    const dst = start * 3;
-    for (let i = 0; i < want && dst + i < out.length && skip + i < y.length; i++) out[dst + i] = y[skip + i];
-    onProgress(Math.min(1, (start + piece) / x16.length));
+    const dst = frame * 480, last = frame + hop >= total;
+    for (let i = 0; i < y.length && dst + i < out.length; i++) {
+      let w = 1;
+      if (!first && i < overlap) w = i / overlap;
+      if (!last && i >= y.length - overlap) w = (y.length - i) / overlap;
+      out[dst + i] += y[i] * w;
+    }
+    onProgress(Math.min(1, (frame + hop) / total));
   }
   let peak = 0;
   for (let i = 0; i < out.length; i++) peak = Math.max(peak, Math.abs(out[i]));
@@ -197,4 +210,4 @@ async function convert(ctx, mono48, st = 0, onProgress = () => {}) {
   return out;
 }
 
-module.exports = { resample, pitchTrack, coarsePitch, load, describeVoice, convertChunk, convert };
+module.exports = { resample, pitchTrack, coarsePitch, load, describeVoice, convertWindow, convert };

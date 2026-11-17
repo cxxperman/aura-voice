@@ -22,7 +22,7 @@ process.parentPort.on('message', async ({ data }) => {
         ctx = await ai.load(ort, data.encoder, data.voice, true);
         loaded = key;
       }
-      const out = await ai.convert(ctx, new Float32Array(data.pcm), Number(data.st) || 0, (p) => post({ id, progress: p }));
+      const out = await ai.convert(ctx, new Float32Array(data.pcm), Number(data.st) || 0, (p) => post({ id, progress: p }), Number(data.speaker) || 0);
       post({ id, ok: true, pcm: out.buffer });
     } else {
       post({ id, ok: false, error: 'unknown command' });

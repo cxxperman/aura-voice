@@ -4,3 +4,4 @@ native/bin/
 *.log
 dist/
 third_party/ai/
+ai-demo/

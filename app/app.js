@@ -111,6 +111,7 @@ const DEFAULTS = {
   autoUpdate: true, // ask GitHub for a newer release at start
   aiVoice: '', // the chosen AI voice (id of an imported model)
   aiPitch: 0, // semitones for AI conversion
+  aiSpeaker: 50, // which of the open model's timbres
   voiceLevels: null, // third-octave spectrum of the user's own voice (dB), measured by auto-setup
   autoPreset: null, // { v, eq, about } — the sound auto-setup designed for this voice
   voiceF0: 0, // the user's speaking pitch, Hz, measured by auto-setup: voices that mean "another person" aim from it
@@ -2370,9 +2371,48 @@ async function renderAi() {
   get.hidden = s.encoder;
   get.disabled = s.downloading != null;
   get.textContent = s.downloading != null ? 'Скачиваю…' : `Скачать, ${s.megabytes} МБ`;
-  if (!s.voices.some((v) => v.id === state.aiVoice)) state.aiVoice = s.voices[0]?.id || '';
+  if (state.aiVoice === 'base' ? !s.base.present : !s.voices.some((v) => v.id === state.aiVoice)) state.aiVoice = s.base.present ? 'base' : s.voices[0]?.id || '';
+  // The open voices come first: one free model, 109 timbres.
+  const open = document.createElement('label');
+  open.className = 'ai-voice';
+  const openName = document.createElement('b');
+  openName.textContent = 'Открытые голоса';
+  const openKind = document.createElement('small');
+  if (s.base.present) {
+    const pick = document.createElement('input');
+    pick.type = 'radio';
+    pick.name = 'aiVoice';
+    pick.checked = state.aiVoice === 'base';
+    pick.addEventListener('change', () => { state.aiVoice = 'base'; save(); renderAi(); });
+    const num = document.createElement('input');
+    num.type = 'number';
+    num.min = 0;
+    num.max = s.base.speakers - 1;
+    num.value = state.aiSpeaker;
+    num.className = 'ai-speaker';
+    num.setAttribute('aria-label', 'Номер тембра');
+    num.addEventListener('change', () => { state.aiSpeaker = clamp(Math.round(Number(num.value) || 0), 0, s.base.speakers - 1); num.value = state.aiSpeaker; state.aiVoice = 'base'; save(); });
+    openKind.textContent = `тембр № из ${s.base.speakers}`;
+    open.append(pick, openName, openKind, num);
+  } else {
+    const get = document.createElement('button');
+    get.type = 'button';
+    get.className = 'pill small';
+    get.disabled = s.base.downloading != null;
+    get.textContent = s.base.downloading != null ? `Скачиваю… ${Math.round(s.base.downloading * 100)} %` : `Скачать, ${s.base.megabytes} МБ`;
+    get.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const done = window.auraSystem.aiBase();
+      setTimeout(renderAi, 300);
+      if (!(await done)) aiNote('Не получилось скачать открытые голоса. Проверьте интернет и попробуйте ещё раз.', true);
+      renderAi();
+    });
+    openKind.textContent = `${s.base.speakers} тембров, бесплатно`;
+    open.append(openName, openKind, get);
+  }
   const list = $('#aiVoices');
   list.replaceChildren(
+    open,
     ...(s.voices.length
       ? s.voices.map((v) => {
           const row = document.createElement('label');
@@ -2394,10 +2434,10 @@ async function renderAi() {
           row.append(pick, name, kind, del);
           return row;
         })
-      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Пока пусто. Голос — это файл .onnx модели RVC второго поколения. Модели в формате .pth сначала нужно перевести в .onnx (это умеют RVC WebUI и w-okada voice changer).' })])
+      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Свои голоса: файл .onnx модели RVC второго поколения. Модели в формате .pth сначала нужно перевести в .onnx (это умеют RVC WebUI и w-okada voice changer).' })])
   );
   for (const id of ['aiTry', 'aiFile']) $('#' + id).disabled = aiBusy || !s.encoder || !state.aiVoice;
-  if (s.downloading != null) setTimeout(renderAi, 700);
+  if (s.downloading != null || s.base.downloading != null) setTimeout(renderAi, 700);
 }
 $('#aiGet').addEventListener('click', async () => {
   const done = window.auraSystem.aiDownload();
@@ -2428,7 +2468,7 @@ async function aiRun(mono, label) {
     if (s.converting != null) aiNote(`${label}… ${Math.round(s.converting * 100)} %`);
   }, 500);
   aiNote(`${label}…`);
-  const res = await window.auraSystem.aiConvert(mono.slice().buffer, state.aiVoice, state.aiPitch || 0);
+  const res = await window.auraSystem.aiConvert(mono.slice().buffer, state.aiVoice, state.aiPitch || 0, state.aiSpeaker || 0);
   clearInterval(tick);
   aiBusy = false;
   renderAi();

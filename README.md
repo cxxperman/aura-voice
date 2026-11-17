@@ -60,4 +60,4 @@ Free code signing provided by [SignPath.io](https://signpath.io), certificate by
 
 ## Лицензия
 
-[MIT](LICENSE). В состав входят [RNNoise](https://github.com/xiph/rnnoise) (BSD-3-Clause) и [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) (MIT / Apache-2.0); их лицензии лежат рядом с модулем.
+[MIT](LICENSE). «Открытые голоса» раздела «ИИ-голоса» — базовая модель [RVC](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) (MIT), обученная на наборе [VCTK](https://datashare.ed.ac.uk/handle/10283/3443) (CC BY 4.0) и экспортированная в ONNX в этом репозитории (`.github/workflows/ai-export.yml`). В состав также входят [RNNoise](https://github.com/xiph/rnnoise) (BSD-3-Clause) и [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) (MIT / Apache-2.0); их лицензии лежат рядом с модулем.

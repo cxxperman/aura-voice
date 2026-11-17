@@ -502,6 +502,59 @@ const aiEncoder = () => {
   const dev = path.join(__dirname, 'third_party', 'ai', AI_ENCODER.file);
   return !app.isPackaged && fs.existsSync(dev) ? dev : null;
 };
+// The open voices: RVC's own v2 base model (MIT; trained by the RVC project on the open VCTK
+// corpus, CC BY 4.0), exported with RVC's exporter in this repository's CI (ai-export workflow).
+// One file, 109 timbres. Fetched on the user's click from this project's releases.
+const AI_BASE = {
+  file: 'rvc-v2-base-40k.onnx',
+  url: 'https://github.com/cxxperman/aura-voice/releases/download/ai-voices-1/rvc-v2-base-40k.onnx',
+  size: 110892490,
+  sha256: 'f1bac9e2433823c9a39d5375c2cc7b7e98cd4c6300fd26efb67a9bf9b9681023',
+  speakers: 109,
+};
+const aiBase = () => {
+  const own = path.join(aiDir(), AI_BASE.file);
+  if (fs.existsSync(own)) return own;
+  const dev = path.join(__dirname, 'third_party', 'ai', 'base', AI_BASE.file);
+  return !app.isPackaged && fs.existsSync(dev) ? dev : null;
+};
+// A file this version knows the size and SHA-256 of, streamed to disk; `progress` gets 0…1.
+async function aiFetch(item, progress) {
+  const part = path.join(aiDir(), item.file + '.part');
+  try {
+    const res = await net.fetch(item.url, { headers: { 'User-Agent': `AuraVoice/${app.getVersion()}` } });
+    if (!res.ok || !res.body) return false;
+    const out = fs.createWriteStream(part);
+    const hash = crypto.createHash('sha256');
+    let got = 0;
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      hash.update(chunk);
+      got += chunk.length;
+      progress(Math.min(0.999, got / item.size));
+      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
+    }
+    await new Promise((r) => out.end(r));
+    if (got !== item.size || hash.digest('hex') !== item.sha256) return false; // exactly the tested file, or nothing
+    fs.renameSync(part, path.join(aiDir(), item.file));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rm(part, { force: true }, () => {});
+  }
+}
+let aiBaseDownload = null;
+ipcMain.handle('ai:base', async () => {
+  if (aiBaseDownload != null || aiBase()) return !!aiBase();
+  aiBaseDownload = 0;
+  const ok = await aiFetch(AI_BASE, (p) => (aiBaseDownload = p));
+  aiBaseDownload = null;
+  return ok;
+});
 const aiVoiceId = /^[0-9a-f-]{36}$/;
 const aiList = () => {
   try {
@@ -538,38 +591,13 @@ function aiAsk(msg) {
     aiChild.postMessage({ ...msg, id });
   });
 }
-ipcMain.handle('ai:status', () => ({ encoder: !!aiEncoder(), megabytes: Math.round(AI_ENCODER.size / 1e6), downloading: aiDownload, converting: aiProgress, voices: aiList() }));
+ipcMain.handle('ai:status', () => ({ encoder: !!aiEncoder(), megabytes: Math.round(AI_ENCODER.size / 1e6), downloading: aiDownload, converting: aiProgress, voices: aiList(), base: { present: !!aiBase(), megabytes: Math.round(AI_BASE.size / 1e6), downloading: aiBaseDownload, speakers: AI_BASE.speakers } }));
 ipcMain.handle('ai:download', async () => {
   if (aiDownload != null || aiEncoder()) return !!aiEncoder();
   aiDownload = 0;
-  const part = path.join(aiDir(), AI_ENCODER.file + '.part');
-  try {
-    const res = await net.fetch(AI_ENCODER.url, { headers: { 'User-Agent': `AuraVoice/${app.getVersion()}` } });
-    if (!res.ok || !res.body) return false;
-    const out = fs.createWriteStream(part);
-    const hash = crypto.createHash('sha256');
-    let got = 0;
-    const reader = res.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = Buffer.from(value);
-      hash.update(chunk);
-      got += chunk.length;
-      aiDownload = Math.min(0.999, got / AI_ENCODER.size);
-      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
-    }
-    await new Promise((r) => out.end(r));
-    // Exactly the file this version was tested with, or nothing.
-    if (got !== AI_ENCODER.size || hash.digest('hex') !== AI_ENCODER.sha256) return false;
-    fs.renameSync(part, path.join(aiDir(), AI_ENCODER.file));
-    return true;
-  } catch {
-    return false;
-  } finally {
-    aiDownload = null;
-    fs.rm(part, { force: true }, () => {});
-  }
+  const ok = await aiFetch(AI_ENCODER, (p) => (aiDownload = p));
+  aiDownload = null;
+  return ok;
 });
 ipcMain.handle('ai:add', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: 'Добавить голос', filters: [{ name: 'Модель голоса ONNX', extensions: ['onnx'] }], properties: ['openFile'] });
@@ -596,11 +624,12 @@ ipcMain.handle('ai:remove', (_e, id) => {
   fs.rm(path.join(aiDir(), id + '.onnx'), { force: true }, () => {});
   return true;
 });
-ipcMain.handle('ai:convert', async (_e, pcm, id, st) => {
+ipcMain.handle('ai:convert', async (_e, pcm, id, st, speaker) => {
   const encoder = aiEncoder();
-  if (!encoder || typeof id !== 'string' || !aiVoiceId.test(id) || !(pcm instanceof ArrayBuffer) || pcm.byteLength % 4 || pcm.byteLength > 4 * 48000 * 600) return { error: 'Нечего преобразовывать.' };
+  const voiceFile = id === 'base' ? aiBase() : typeof id === 'string' && aiVoiceId.test(id) ? path.join(aiDir(), id + '.onnx') : null;
+  if (!encoder || !voiceFile || !(pcm instanceof ArrayBuffer) || pcm.byteLength % 4 || pcm.byteLength > 4 * 48000 * 600) return { error: 'Нечего преобразовывать.' };
   aiProgress = 0;
-  const res = await aiAsk({ cmd: 'convert', encoder, voice: path.join(aiDir(), id + '.onnx'), pcm, st: Math.max(-24, Math.min(24, Number(st) || 0)) });
+  const res = await aiAsk({ cmd: 'convert', encoder, voice: voiceFile, pcm, st: Math.max(-24, Math.min(24, Number(st) || 0)), speaker: id === 'base' ? Math.max(0, Math.min(AI_BASE.speakers - 1, Math.round(Number(speaker) || 0))) : 0 });
   aiProgress = null;
   return res.ok ? { pcm: res.pcm } : { error: res.error || 'Не получилось.' };
 });
