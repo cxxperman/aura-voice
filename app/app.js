@@ -1820,7 +1820,7 @@ const engineSelect = $('#nsEngine');
 function renderEngine() {
   const deep = moduleLevels?.deep; // 1 = available, -1 = switched off after a crash, 0/undefined = not there
   engineSelect.disabled = !sys.installed || !deep;
-  engineSelect.options[1].textContent = deep === -1 ? 'Качественный — отключён после сбоя, выберите, чтобы попробовать снова' : 'Качественный — DeepFilterNet, 30 мс';
+  engineSelect.options[1].textContent = deep === -1 ? 'Жёсткий — отключён после сбоя, выберите, чтобы попробовать снова' : 'Жёсткий — DeepFilterNet, 30 мс: давит шум сильнее, но меняет голос';
   engineSelect.value = String(state.nsEngine);
 }
 engineSelect.addEventListener('change', async () => {
@@ -1981,7 +1981,12 @@ tuneBtn.addEventListener('click', async () => {
   // The neural denoiser does the cleaning; the pause threshold only has to sit a little above the
   // room. Set high, it eats the quiet starts and ends of words — that is heard as a torn voice.
   state.g.clean = clamp(Math.round((noise + gain + 8 + 65) / 0.4), 5, 70);
-  state.g.ns = snr > 45 ? 25 : snr > 30 ? 40 : 60;
+  // Measured on clean speech: the ordinary engine at 60 changes the voice by well under a dB,
+  // the hard one by 2-5 dB (it eats quiet consonants and word endings). So the ordinary one, at
+  // the strength that removes steady noise without touching the voice; a little less in a quiet room.
+  state.g.ns = snr > 45 ? 50 : 60;
+  state.nsEngine = 0;
+  renderEngine();
   state.g.pop = 50;
   state.auto = true;
   $('#auto').checked = true;

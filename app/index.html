@@ -188,7 +188,7 @@
         <div class="group devices">
           <label class="field"><span>Профиль микрофона</span><select id="micProfile"></select></label>
           <label class="field"><span>Громкость на выходе</span><select id="loudTarget"><option value="0">Не выравнивать</option><option value="-18">−18 LUFS — звонки и Discord</option><option value="-16">−16 LUFS — подкаст</option><option value="-14">−14 LUFS — YouTube и стрим (плотнее, лимитер работает чаще)</option></select></label>
-          <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Быстрый — RNNoise, 10 мс</option><option value="1">Качественный — DeepFilterNet, 30 мс</option></select></label>
+          <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Обычный — RNNoise, 10 мс (рекомендуется)</option><option value="1">Жёсткий — DeepFilterNet, 30 мс: давит шум сильнее, но меняет голос</option></select></label>
           <label class="switch"><span><b>Запускать вместе с Windows</b><small>Aura открывается свёрнутой в трей, обработка голоса работает сразу</small></span><input type="checkbox" id="autostart"><i></i></label>
           <label class="switch"><span><b>Проверять обновления</b><small>При запуске спрашивает у GitHub, вышла ли новая версия. Устанавливается только по вашему нажатию</small></span><input type="checkbox" id="autoUpdate"><i></i></label>
           <label class="switch"><span><b>Убрать гул сети</b><small>Вырезает 50 Гц и его гармоники — гудение от розетки и плохой земли</small></span><input type="checkbox" id="dehum"><i></i></label>
