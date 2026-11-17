@@ -7,7 +7,21 @@ import numpy as np
 import torch
 
 sys.path.insert(0, "rvc")
+import infer.lib.infer_pack.models_onnx as models_onnx  # noqa: E402
 from infer.lib.infer_pack.models_onnx import SynthesizerTrnMsNSFsidM  # noqa: E402
+
+
+# At this tag the flow layers return (x, logdet) pairs — they were retyped for TorchScript — but
+# the ONNX model's coupling block still expects a bare tensor, so the official exporter fails.
+# The arithmetic is untouched; only the pair is unpacked.
+def _coupling_forward(self, x, x_mask, g=None, reverse=False):
+    for flow in (reversed(self.flows) if reverse else self.flows):
+        out = flow(x, x_mask, g=g, reverse=reverse)
+        x = out[0] if isinstance(out, tuple) else out
+    return x
+
+
+models_onnx.ResidualCouplingBlock.forward = _coupling_forward
 
 
 def export(config_path, weights_path, out_path):
