@@ -2,6 +2,7 @@
 // freeze the window or the tray, and a crash inside the runtime must not take the app with it.
 const ort = require('onnxruntime-node');
 const ai = require('./ai-convert.js');
+const pth = require('./ai-pth.js');
 
 let ctx = null;
 let loaded = '';
@@ -16,6 +17,9 @@ process.parentPort.on('message', async ({ data }) => {
       const info = ai.describeVoice(session);
       await session.release?.();
       post({ id, ok: true, info });
+    } else if (cmd === 'pth') {
+      // A shared .pth model → ONNX. The file is only read, never executed (see ai-pth.js).
+      post({ id, ok: true, info: pth.convertPth(data.file, data.templates, data.out) });
     } else if (cmd === 'convert') {
       const key = `${data.encoder}|${data.voice}`;
       if (key !== loaded) {

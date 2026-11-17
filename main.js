@@ -600,16 +600,26 @@ ipcMain.handle('ai:download', async () => {
   return ok;
 });
 ipcMain.handle('ai:add', async () => {
-  const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: 'Добавить голос', filters: [{ name: 'Модель голоса ONNX', extensions: ['onnx'] }], properties: ['openFile'] });
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: 'Добавить голос', filters: [{ name: 'Модель голоса RVC', extensions: ['onnx', 'pth'] }], properties: ['openFile'] });
   if (canceled || !filePaths[0]) return null;
   try {
     if (fs.statSync(filePaths[0]).size > 600e6) return { error: 'Файл слишком большой для модели голоса.' };
-    const res = await aiAsk({ cmd: 'inspect', voice: filePaths[0] });
+    const id = crypto.randomUUID();
+    const stored = path.join(aiDir(), id + '.onnx');
+    let source = filePaths[0];
+    if (path.extname(source).toLowerCase() === '.pth') {
+      const made = await aiAsk({ cmd: 'pth', file: source, templates: path.join(__dirname, 'ai-templates'), out: stored });
+      if (!made.ok) {
+        fs.rm(stored, { force: true }, () => {});
+        return { error: /[а-яё]/i.test(made.error || '') ? made.error : `Не получилось перевести .pth: ${made.error || 'неизвестная ошибка'}` };
+      }
+      source = stored;
+    }
+    const res = await aiAsk({ cmd: 'inspect', voice: source });
     if (!res.ok) return { error: 'Не получилось прочитать этот файл как модель ONNX.' };
     if (!res.info.ok) return { error: 'Это не модель голоса RVC: в ней нет входов phone или feats.' };
     if (res.info.dim === 256) return { error: 'Это модель первого поколения (256). Пока поддерживаются модели v2 (768).' };
-    const id = crypto.randomUUID();
-    fs.copyFileSync(filePaths[0], path.join(aiDir(), id + '.onnx'));
+    if (source !== stored) fs.copyFileSync(source, stored);
     const list = aiList();
     list.push({ id, name: path.basename(filePaths[0], path.extname(filePaths[0])).slice(0, 40), layout: res.info.layout, pitched: res.info.pitched });
     aiSave(list);

@@ -2434,7 +2434,7 @@ async function renderAi() {
           row.append(pick, name, kind, del);
           return row;
         })
-      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Свои голоса: файл .onnx модели RVC второго поколения. Модели в формате .pth сначала нужно перевести в .onnx (это умеют RVC WebUI и w-okada voice changer).' })])
+      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Свои голоса: файл модели RVC второго поколения — .pth (как их обычно выкладывают; Aura сама переведёт его в нужный вид, не запуская ничего из файла) или .onnx. Файл .index не нужен.' })])
   );
   for (const id of ['aiTry', 'aiFile']) $('#' + id).disabled = aiBusy || !s.encoder || !state.aiVoice;
   if (s.downloading != null || s.base.downloading != null) setTimeout(renderAi, 700);
