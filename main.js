@@ -402,7 +402,7 @@ ipcMain.handle('take:load', () => {
 ipcMain.handle('render:available', () => fs.existsSync(renderTool()));
 ipcMain.handle('render:sample', async (_e, pcm, settings) => {
   const bytes = Buffer.from(pcm instanceof ArrayBuffer ? pcm : pcm?.buffer || []);
-  if (!bytes.length || bytes.length % 4 || bytes.length > 4 * 48000 * 60 || !fs.existsSync(renderTool())) return null;
+  if (!bytes.length || bytes.length % 4 || bytes.length > 4 * 48000 * 600 || !fs.existsSync(renderTool())) return null; // ten minutes at most
   const base = path.join(renderDir(), `sample-${process.pid}-${++renderSeq}`);
   try {
     fs.writeFileSync(base + '.in', bytes);

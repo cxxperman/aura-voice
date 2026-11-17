@@ -2496,6 +2496,18 @@ $('#aiPitch').addEventListener('input', (e) => {
   save();
   if (aiLiveOn) window.auraSystem.aiLiveSet(state.aiPitch, state.aiSpeaker || 0);
 });
+// The neural voice sits on top of the voice settings, as it does live: the recording first goes
+// through the same chain as the microphone (noise suppression, equalizer, compression, loudness),
+// and what comes out of that is what the network hears.
+async function throughVoiceSettings(mono) {
+  if (!(await window.auraSystem.renderAvailable())) return mono;
+  const out = await window.auraSystem.renderSample(mono.slice().buffer, systemLines(true, false));
+  if (!out) return mono;
+  const stereo = new Float32Array(out);
+  const voice = new Float32Array(stereo.length >> 1);
+  for (let i = 0; i < voice.length; i++) voice[i] = 0.5 * (stereo[2 * i] + stereo[2 * i + 1]);
+  return voice;
+}
 async function aiRun(mono, label) {
   aiBusy = true;
   renderAi();
@@ -2504,7 +2516,7 @@ async function aiRun(mono, label) {
     if (s.converting != null) aiNote(`${label}… ${Math.round(s.converting * 100)} %`);
   }, 500);
   aiNote(`${label}…`);
-  const res = await window.auraSystem.aiConvert(mono.slice().buffer, state.aiVoice, state.aiPitch || 0, state.aiSpeaker || 0);
+  const res = await window.auraSystem.aiConvert((await throughVoiceSettings(mono)).slice().buffer, state.aiVoice, state.aiPitch || 0, state.aiSpeaker || 0);
   clearInterval(tick);
   aiBusy = false;
   renderAi();
