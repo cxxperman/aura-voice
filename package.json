@@ -21,6 +21,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "hub-client.js",
       "ai-convert.js",
       "ai-worker.js",
       "ai-live.js",

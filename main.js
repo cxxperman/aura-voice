@@ -767,7 +767,61 @@ ipcMain.on('ui:state', (_e, state) => {
     voices: Array.isArray(state.voices) ? state.voices.slice(0, 40).map((v) => ({ id: String(v.id), name: String(v.name) })) : [],
   };
   refreshTray();
+  // Other dev.txt apps see what the voice is doing (the island can show it, for example)
+  hub?.state('aura.voice', { on: ui.on, mute: ui.mute, preset: ui.preset, presetName: ui.presetName, voice: ui.voice });
 });
+
+/* ───── core.txt hub ─────
+ * core.txt (the dev.txt launcher) keeps a local hub on 127.0.0.1:42080. Through it Aura shows its
+ * settings on the launcher's shared settings page, takes changes from there, and follows the
+ * shared look (accent colour, reduced motion). The hub being absent is normal: the client keeps
+ * trying quietly and Aura works on its own. The protocol is in kit.txt, hub/PROTOCOL.md;
+ * hub-client.js is copied from there as is. */
+const { connect: hubConnect } = require('./hub-client');
+let hub = null;
+let hubTheme = null;
+let hubSeq = 0;
+const hubWaiting = new Map(); // request id → { resolve, reject, timer }
+
+// The settings live in the window, so a change is passed to it and answered from there.
+function askWindow(kind, args) {
+  return new Promise((resolve, reject) => {
+    if (!win || win.isDestroyed()) return reject(new Error('окно Aura закрыто'));
+    const id = ++hubSeq;
+    const timer = setTimeout(() => { hubWaiting.delete(id); reject(new Error('Aura не ответила')); }, 4000);
+    hubWaiting.set(id, { resolve, reject, timer });
+    win.webContents.send('hub:command', id, kind, String(args?.key || ''), args?.value);
+  });
+}
+function startHub() {
+  hub = hubConnect({
+    app: 'aura',
+    name: 'Aura',
+    version: app.getVersion(),
+    topics: ['hub.theme'],
+    commands: {
+      'settings.set': (args) => askWindow('set', args),
+      'settings.run': (args) => askWindow('run', args),
+      show: () => { showWindow(); return null; },
+    },
+    onState(topic, data) {
+      if (topic !== 'hub.theme') return;
+      hubTheme = data;
+      win?.webContents.send('hub:theme', data);
+    },
+  });
+}
+ipcMain.on('hub:settings', (_e, settings) => {
+  if (settings && typeof settings === 'object') hub?.state('aura.settings', settings);
+});
+ipcMain.on('hub:result', (_e, id, ok, error) => {
+  const w = hubWaiting.get(id);
+  if (!w) return;
+  hubWaiting.delete(id);
+  clearTimeout(w.timer);
+  if (ok) w.resolve(null); else w.reject(new Error(String(error || 'не получилось')));
+});
+ipcMain.handle('hub:theme', () => hubTheme);
 
 /* ───── System module (APO) ───── */
 const dataDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'Aura');
@@ -937,6 +991,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowed.has(permission)));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
   createWindow();
+  if (!devRun) startHub();
   checkAttached();
   setInterval(checkAttached, 60000);
   if (!devRun) {
@@ -959,6 +1014,7 @@ app.whenReady().then(() => {
 app.on('second-instance', showWindow);
 app.on('before-quit', () => {
   quitting = true;
+  hub?.close(); // says goodbye, so the launcher drops Aura's settings at once
 });
 
 app.on('window-all-closed', () => app.quit());

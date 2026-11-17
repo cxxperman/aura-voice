@@ -446,8 +446,120 @@ async function setPower(on) {
   renderPower();
   renderSystem();
 }
+/* ───────── core.txt: the shared settings page ─────────
+ * The dev.txt launcher shows the everyday settings of every app on one page. Aura describes its
+ * own to the launcher's hub and takes changes back (kit.txt, hub/PROTOCOL.md, "Настройки
+ * приложения"). Labels and values are read from this window's own controls, and a change is made
+ * by operating the same control — so the launcher and the window can never disagree. */
+const HUB_SWITCHES = ['auto', 'monitor', 'dehum', 'autostart', 'autoUpdate'];
+const HUB_SELECTS = ['nsEngine', 'loudTarget'];
+const hubSwitch = (id) => {
+  const el = $('#' + id);
+  const label = el?.closest('label');
+  if (!el || !label || el.disabled) return null;
+  return { key: id, type: 'switch', label: label.querySelector('b')?.textContent || id, hint: label.querySelector('small')?.textContent || '', value: el.checked };
+};
+const hubSelect = (id) => {
+  const el = $('#' + id);
+  if (!el || el.disabled || !el.options.length) return null;
+  const short = (text) => text.split(' — ')[0].trim(); // "Обычный — RNNoise, 10 мс" → "Обычный"
+  return {
+    key: id, type: 'choice', label: el.closest('label')?.querySelector('span')?.textContent || id, value: el.value,
+    options: [...el.options].map((o) => ({ value: o.value, label: short(o.textContent) })),
+  };
+};
+function hubSettingsNow() {
+  const only = (items) => items.filter(Boolean);
+  return {
+    groups: [
+      { title: '', items: only([
+        { key: 'power', type: 'switch', label: 'Обработка голоса', hint: 'Включает и выключает Aura', value: engine.running },
+        { key: 'preset', type: 'choice', label: 'Готовый звук', value: state.preset, options: Object.entries(PRESETS).map(([id, p]) => ({ value: id, label: p.name })) },
+        sys.installed ? { key: 'mute', type: 'switch', label: 'Заглушить микрофон', hint: 'Тишина для всех программ', value: !!state.mute } : null,
+        hubSwitch('auto'),
+        hubSwitch('monitor'),
+      ]) },
+      { title: 'Звук', items: only([hubSelect('nsEngine'), hubSelect('loudTarget'), hubSwitch('dehum')]) },
+      { title: 'Запуск и обновления', items: only([hubSwitch('autostart'), hubSwitch('autoUpdate')]) },
+    ],
+  };
+}
+let hubTimer = 0;
+let hubLast = '';
+// Debounced, and sent only when something really changed
+function publishHubSettings() {
+  if (!window.auraSystem?.hubSettings || TEST || PROBE || DATA) return;
+  clearTimeout(hubTimer);
+  hubTimer = setTimeout(() => {
+    const now = hubSettingsNow();
+    const text = JSON.stringify(now);
+    if (text === hubLast) return;
+    hubLast = text;
+    window.auraSystem.hubSettings(now);
+  }, 120);
+}
+async function applyHubSetting(key, value) {
+  if (key === 'power') return setPower(!!value);
+  if (key === 'preset') {
+    if (!PRESETS[value]) throw new Error('такого звука нет');
+    return selectPreset(value);
+  }
+  if (key === 'mute') {
+    if (!sys.installed) throw new Error('Aura не встроена в микрофон');
+    $('#mute').checked = state.mute = !!value;
+    save();
+    pushSystem();
+    return reportToTray();
+  }
+  const el = HUB_SWITCHES.includes(key) || HUB_SELECTS.includes(key) ? $('#' + key) : null;
+  if (!el || el.disabled) throw new Error('такой настройки нет');
+  if (el.type === 'checkbox') el.checked = !!value;
+  else {
+    if (![...el.options].some((o) => o.value === String(value))) throw new Error('такого варианта нет');
+    el.value = String(value);
+  }
+  el.dispatchEvent(new Event('change', { bubbles: true })); // the control's own handler does the rest
+}
+// The shared look: one accent colour for every dev.txt app (or Aura's own, by the character), and
+// "less motion" switched on for the whole ecosystem.
+function applyHubTheme(theme) {
+  const root = document.documentElement;
+  const accent = theme && /^#[0-9a-f]{6}$/i.test(theme.accent || '') ? theme.accent : null;
+  const vars = [
+    ['--accent', accent],
+    ['--accent-solid', accent && 'color-mix(in srgb, ' + accent + ', black 12%)'],
+    ['--accent-tint', accent && 'color-mix(in srgb, ' + accent + ' 22%, transparent)'],
+  ];
+  for (const [name, value] of vars) {
+    if (value) root.style.setProperty(name, value); else root.style.removeProperty(name);
+  }
+  root.toggleAttribute('data-reduced-motion', !!theme?.reducedMotion);
+}
+function startHubSettings() {
+  const bridge = window.auraSystem;
+  if (!bridge?.onHubCommand) return;
+  bridge.onHubCommand(async (id, kind, key, value) => {
+    try {
+      if (kind !== 'set') throw new Error('такой команды нет');
+      await applyHubSetting(key, value);
+      bridge.hubResult(id, true);
+    } catch (e) {
+      bridge.hubResult(id, false, String(e?.message || e));
+    }
+    hubLast = ''; // answer with the full picture even if nothing changed: the launcher is waiting for it
+    publishHubSettings();
+  });
+  bridge.onHubTheme(applyHubTheme);
+  bridge.hubTheme().then(applyHubTheme, () => {});
+  // Anything changed in this window by hand reaches the launcher too
+  document.addEventListener('change', publishHubSettings);
+  setInterval(publishHubSettings, 3000); // and what changes without a click: the module appearing, a select being filled
+  publishHubSettings();
+}
+
 // Keep the tray icon and its menu in step with the window.
 function reportToTray() {
+  publishHubSettings();
   window.auraSystem?.report({
     mute: state.mute && sys.installed,
     system: sys.installed,
@@ -2843,6 +2955,7 @@ async function boot() {
   await loadCaptureDevices(); // the microphone's name picks its profile
   checkUpdate();
   setInterval(pollSystem, 2000);
+  startHubSettings();
   window.auraSystem?.onCommand((name, arg) => {
     if (name === 'visible') setWindowVisible(!!arg);
     if (name === 'power') setPower(!engine.running);
