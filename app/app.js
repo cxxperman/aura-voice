@@ -109,6 +109,8 @@ const DEFAULTS = {
   loud: 0, // output loudness to hold, LUFS; 0 = leave it
   dehum: false, // notch out 50 Hz mains hum
   autoUpdate: true, // ask GitHub for a newer release at start
+  aiVoice: '', // the chosen AI voice (id of an imported model)
+  aiPitch: 0, // semitones for AI conversion
   voiceLevels: null, // third-octave spectrum of the user's own voice (dB), measured by auto-setup
   autoPreset: null, // { v, eq, about } — the sound auto-setup designed for this voice
   voiceF0: 0, // the user's speaking pitch, Hz, measured by auto-setup: voices that mean "another person" aim from it
@@ -1788,6 +1790,7 @@ function showTab(name) {
   if (name === 'setup') loadCaptureDevices();
   if (name === 'effects') renderVoices();
   if (name === 'voice') queueEq();
+  if (name === 'ai') renderAi();
   if (name === 'sounds' && !catalog.started) {
     catalog.started = true; // nothing is fetched until the user actually opens the page
     loadCatalog(true);
@@ -2345,6 +2348,130 @@ takeBtn.addEventListener('click', async () => {
     }
   };
   rec.start();
+});
+
+/* ───────── AI voices ─────────
+ * Neural voice conversion with models the user adds. Off line for now: a recording goes in,
+ * the same words in another voice come out. */
+const aiNote = (text, warn = false) => {
+  $('#aiNote').textContent = text;
+  $('#aiNote').className = warn ? 'footnote warn' : 'footnote';
+};
+let aiBusy = false;
+async function renderAi() {
+  const s = await window.auraSystem.aiStatus();
+  $('#aiEngineTitle').textContent = s.encoder ? 'Нейросеть готова' : 'Нужен компонент для ИИ-голосов';
+  $('#aiEngineText').textContent = s.encoder
+    ? 'Преобразование идёт на вашем компьютере, на видеокарте, если она есть. Ничего никуда не отправляется.'
+    : s.downloading != null
+      ? `Скачиваю… ${Math.round(s.downloading * 100)} %`
+      : `Модель, которая понимает, что сказано в записи. ${s.megabytes} МБ, скачивается один раз с huggingface.co.`;
+  const get = $('#aiGet');
+  get.hidden = s.encoder;
+  get.disabled = s.downloading != null;
+  get.textContent = s.downloading != null ? 'Скачиваю…' : `Скачать, ${s.megabytes} МБ`;
+  if (!s.voices.some((v) => v.id === state.aiVoice)) state.aiVoice = s.voices[0]?.id || '';
+  const list = $('#aiVoices');
+  list.replaceChildren(
+    ...(s.voices.length
+      ? s.voices.map((v) => {
+          const row = document.createElement('label');
+          row.className = 'ai-voice';
+          const pick = document.createElement('input');
+          pick.type = 'radio';
+          pick.name = 'aiVoice';
+          pick.checked = v.id === state.aiVoice;
+          pick.addEventListener('change', () => { state.aiVoice = v.id; save(); });
+          const name = document.createElement('b');
+          name.textContent = v.name;
+          const kind = document.createElement('small');
+          kind.textContent = v.pitched ? 'с высотой' : 'без высоты';
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.className = 'link';
+          del.textContent = 'Убрать';
+          del.addEventListener('click', async (e) => { e.preventDefault(); await window.auraSystem.aiRemove(v.id); renderAi(); });
+          row.append(pick, name, kind, del);
+          return row;
+        })
+      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Пока пусто. Голос — это файл .onnx модели RVC второго поколения. Модели в формате .pth сначала нужно перевести в .onnx (это умеют RVC WebUI и w-okada voice changer).' })])
+  );
+  for (const id of ['aiTry', 'aiFile']) $('#' + id).disabled = aiBusy || !s.encoder || !state.aiVoice;
+  if (s.downloading != null) setTimeout(renderAi, 700);
+}
+$('#aiGet').addEventListener('click', async () => {
+  const done = window.auraSystem.aiDownload();
+  setTimeout(renderAi, 300);
+  if (!(await done)) aiNote('Не получилось скачать компонент. Проверьте интернет и попробуйте ещё раз.', true);
+  renderAi();
+});
+$('#aiAdd').addEventListener('click', async () => {
+  const res = await window.auraSystem.aiAdd();
+  if (res?.error) aiNote(res.error, true);
+  else if (res?.ok) aiNote('Голос добавлен.');
+  renderAi();
+});
+$('#aiPitch').value = state.aiPitch || 0;
+fill($('#aiPitch'));
+$('#aiPitchVal').textContent = (state.aiPitch > 0 ? '+' : '') + (state.aiPitch || 0);
+$('#aiPitch').addEventListener('input', (e) => {
+  state.aiPitch = Number(e.target.value);
+  $('#aiPitchVal').textContent = (state.aiPitch > 0 ? '+' : '') + state.aiPitch;
+  fill(e.target);
+  save();
+});
+async function aiRun(mono, label) {
+  aiBusy = true;
+  renderAi();
+  const tick = setInterval(async () => {
+    const s = await window.auraSystem.aiStatus();
+    if (s.converting != null) aiNote(`${label}… ${Math.round(s.converting * 100)} %`);
+  }, 500);
+  aiNote(`${label}…`);
+  const res = await window.auraSystem.aiConvert(mono.slice().buffer, state.aiVoice, state.aiPitch || 0);
+  clearInterval(tick);
+  aiBusy = false;
+  renderAi();
+  if (res.error) return aiNote(`Не получилось: ${res.error}`, true), null;
+  return new Float32Array(res.pcm);
+}
+$('#aiTry').addEventListener('click', async () => {
+  if (!engine.running) return aiNote('Сначала включите сферу: запись играет через неё.', true);
+  if (engine.sampleMode) {
+    engine.stopSample();
+    sampleRaw = sampleRendered = null;
+    syncBypass();
+    pushSystem();
+    renderSample();
+    $('#aiTry').textContent = 'Послушать этим голосом';
+    return aiNote('');
+  }
+  const stored = await window.auraSystem.loadTake();
+  if (!stored) return aiNote('Записи ещё нет. Нажмите «Автонастройку» или «Записать пробу» — и вернитесь сюда.', true);
+  const out = await aiRun(new Float32Array(stored), 'Преобразую вашу запись');
+  if (!out) return;
+  engine.playBuffer(toBuffer(out, 1));
+  syncBypass();
+  renderSample();
+  $('#aiTry').textContent = 'Остановить';
+  aiNote('Играет ваша запись выбранным голосом.');
+});
+$('#aiFile').addEventListener('click', async () => {
+  const file = await pickFile('audio/*,video/*');
+  if (!file) return;
+  let mono;
+  try {
+    aiNote(`Читаю «${file.name}»…`);
+    mono = await decodeMono(file, 600);
+  } catch {
+    return aiNote('Не получилось прочитать этот файл. Подойдут mp3, wav, m4a, ogg, flac, mp4, webm.', true);
+  }
+  const out = await aiRun(mono, `Преобразую ${Math.round(mono.length / 48000)} с звука`);
+  if (!out) return;
+  const token = await window.auraSystem.renderBegin(file.name);
+  if (!token) return aiNote('');
+  const res = (await sendMono(token, out)) ? await window.auraSystem.renderFinish(token, null) : { ok: false };
+  aiNote(res.ok ? `Готово: «${res.name}», ${Math.round(res.seconds)} с.` : 'Не получилось сохранить файл.', !res.ok);
 });
 
 /* ───────── Updates ───────── */

@@ -1,7 +1,7 @@
 {
   "name": "aura-voice",
   "productName": "Aura",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "Студийная обработка голоса с микрофона в реальном времени",
   "main": "main.js",
   "scripts": {
@@ -21,9 +21,16 @@
     "files": [
       "main.js",
       "preload.js",
+      "ai-convert.js",
+      "ai-worker.js",
       "app/**",
       "assets/**",
-      "!app/dev-fixtures.js"
+      "!app/dev-fixtures.js",
+      "node_modules/onnxruntime-node/**",
+      "node_modules/onnxruntime-common/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/linux/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
     ],
     "extraResources": [
       {
@@ -55,6 +62,12 @@
       "runAfterFinish": true,
       "include": "build/installer.nsh",
       "artifactName": "Aura-Setup-${version}.exe"
-    }
+    },
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**"
+    ]
+  },
+  "dependencies": {
+    "onnxruntime-node": "^1.31.1"
   }
 }

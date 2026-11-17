@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog, shell, nativeTheme, net } = require('electron');
+const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog, shell, nativeTheme, net, utilityProcess } = require('electron');
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
@@ -479,6 +479,130 @@ ipcMain.handle('render:finish', async (_e, token, settings) => {
   } finally {
     clean();
   }
+});
+
+/* ───── AI voices ─────
+ * Neural voice conversion with the user's own voice models (see ai-convert.js). Nothing is
+ * bundled: the content encoder (377 MB) is fetched once on the user's click, voices are files
+ * the user adds. Everything runs in a worker process. */
+const AI_ENCODER = {
+  file: 'vec-768-layer-12.onnx',
+  url: 'https://huggingface.co/NaruseMioShirakana/MoeSS-SUBModel/resolve/main/vec-768-layer-12.onnx',
+  size: 377655729,
+  sha256: 'b3886e7dff1495cda514f94f4680a7b1261e05d6929f5c764cdb17934b413c2a',
+};
+const aiDir = () => {
+  const dir = path.join(app.getPath('userData'), 'ai');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+};
+const aiEncoder = () => {
+  const own = path.join(aiDir(), AI_ENCODER.file);
+  if (fs.existsSync(own)) return own;
+  const dev = path.join(__dirname, 'third_party', 'ai', AI_ENCODER.file);
+  return !app.isPackaged && fs.existsSync(dev) ? dev : null;
+};
+const aiVoiceId = /^[0-9a-f-]{36}$/;
+const aiList = () => {
+  try {
+    const list = JSON.parse(fs.readFileSync(path.join(aiDir(), 'voices.json'), 'utf8'));
+    return Array.isArray(list) ? list.filter((v) => aiVoiceId.test(v.id) && fs.existsSync(path.join(aiDir(), v.id + '.onnx'))) : [];
+  } catch {
+    return [];
+  }
+};
+const aiSave = (list) => fs.writeFileSync(path.join(aiDir(), 'voices.json'), JSON.stringify(list, null, 2));
+let aiDownload = null; // fraction while the encoder is being fetched
+let aiProgress = null; // fraction while a conversion runs
+let aiChild = null;
+let aiSeq = 0;
+const aiWaiting = new Map();
+function aiAsk(msg) {
+  if (!aiChild) {
+    aiChild = utilityProcess.fork(path.join(__dirname, 'ai-worker.js'), [], { serviceName: 'Aura AI voices' });
+    aiChild.on('message', (m) => {
+      if (m.progress != null) return (aiProgress = m.progress);
+      const done = aiWaiting.get(m.id);
+      aiWaiting.delete(m.id);
+      done?.(m);
+    });
+    aiChild.on('exit', () => {
+      aiChild = null;
+      for (const done of aiWaiting.values()) done({ ok: false, error: 'Процесс ИИ-голосов завершился' });
+      aiWaiting.clear();
+    });
+  }
+  return new Promise((resolve) => {
+    const id = ++aiSeq;
+    aiWaiting.set(id, resolve);
+    aiChild.postMessage({ ...msg, id });
+  });
+}
+ipcMain.handle('ai:status', () => ({ encoder: !!aiEncoder(), megabytes: Math.round(AI_ENCODER.size / 1e6), downloading: aiDownload, converting: aiProgress, voices: aiList() }));
+ipcMain.handle('ai:download', async () => {
+  if (aiDownload != null || aiEncoder()) return !!aiEncoder();
+  aiDownload = 0;
+  const part = path.join(aiDir(), AI_ENCODER.file + '.part');
+  try {
+    const res = await net.fetch(AI_ENCODER.url, { headers: { 'User-Agent': `AuraVoice/${app.getVersion()}` } });
+    if (!res.ok || !res.body) return false;
+    const out = fs.createWriteStream(part);
+    const hash = crypto.createHash('sha256');
+    let got = 0;
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      hash.update(chunk);
+      got += chunk.length;
+      aiDownload = Math.min(0.999, got / AI_ENCODER.size);
+      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
+    }
+    await new Promise((r) => out.end(r));
+    // Exactly the file this version was tested with, or nothing.
+    if (got !== AI_ENCODER.size || hash.digest('hex') !== AI_ENCODER.sha256) return false;
+    fs.renameSync(part, path.join(aiDir(), AI_ENCODER.file));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    aiDownload = null;
+    fs.rm(part, { force: true }, () => {});
+  }
+});
+ipcMain.handle('ai:add', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: 'Добавить голос', filters: [{ name: 'Модель голоса ONNX', extensions: ['onnx'] }], properties: ['openFile'] });
+  if (canceled || !filePaths[0]) return null;
+  try {
+    if (fs.statSync(filePaths[0]).size > 600e6) return { error: 'Файл слишком большой для модели голоса.' };
+    const res = await aiAsk({ cmd: 'inspect', voice: filePaths[0] });
+    if (!res.ok) return { error: 'Не получилось прочитать этот файл как модель ONNX.' };
+    if (!res.info.ok) return { error: 'Это не модель голоса RVC: в ней нет входов phone или feats.' };
+    if (res.info.dim === 256) return { error: 'Это модель первого поколения (256). Пока поддерживаются модели v2 (768).' };
+    const id = crypto.randomUUID();
+    fs.copyFileSync(filePaths[0], path.join(aiDir(), id + '.onnx'));
+    const list = aiList();
+    list.push({ id, name: path.basename(filePaths[0], path.extname(filePaths[0])).slice(0, 40), layout: res.info.layout, pitched: res.info.pitched });
+    aiSave(list);
+    return { ok: true };
+  } catch {
+    return { error: 'Не получилось добавить файл.' };
+  }
+});
+ipcMain.handle('ai:remove', (_e, id) => {
+  if (typeof id !== 'string' || !aiVoiceId.test(id)) return false;
+  aiSave(aiList().filter((v) => v.id !== id));
+  fs.rm(path.join(aiDir(), id + '.onnx'), { force: true }, () => {});
+  return true;
+});
+ipcMain.handle('ai:convert', async (_e, pcm, id, st) => {
+  const encoder = aiEncoder();
+  if (!encoder || typeof id !== 'string' || !aiVoiceId.test(id) || !(pcm instanceof ArrayBuffer) || pcm.byteLength % 4 || pcm.byteLength > 4 * 48000 * 600) return { error: 'Нечего преобразовывать.' };
+  aiProgress = 0;
+  const res = await aiAsk({ cmd: 'convert', encoder, voice: path.join(aiDir(), id + '.onnx'), pcm, st: Math.max(-24, Math.min(24, Number(st) || 0)) });
+  aiProgress = null;
+  return res.ok ? { pcm: res.pcm } : { error: res.error || 'Не получилось.' };
 });
 
 /* ───── Preset files ───── */

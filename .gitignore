@@ -3,3 +3,4 @@ native/build/
 native/bin/
 *.log
 dist/
+third_party/ai/
