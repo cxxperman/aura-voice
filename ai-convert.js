@@ -146,6 +146,34 @@ function describeVoice(session) {
 const FRAMES = 200;
 const WINDOW16 = 400 + (FRAMES / 2 - 1) * 320; // 16 kHz samples that give the encoder exactly FRAMES / 2 frames
 
+// Where the input is silent the network has nothing to build a voice from, and what it puts out
+// instead is hiss made of its own random part. So the output follows the input's silences: per
+// 10 ms frame, 1 where there is sound (and for 150 ms after it, so word endings are not cut), 0
+// where there is none. `quiet` is the level under which the input counts as silence.
+function soundMask(x16, frames, quiet = 0.003) {
+  const mask = new Float32Array(frames);
+  let hold = 0;
+  for (let t = 0; t < frames; t++) {
+    const from = Math.max(0, t * 160 - 160), to = Math.min(x16.length, t * 160 + 160);
+    let e = 0;
+    for (let i = from; i < to; i++) e += x16[i] * x16[i];
+    if (to > from && Math.sqrt(e / (to - from)) > quiet) hold = 15;
+    mask[t] = hold > 0 ? 1 : 0;
+    if (hold > 0) hold--;
+  }
+  for (let t = frames - 2; t >= 0; t--) if (mask[t + 1] && !mask[t]) { mask[t] = 1; t--; } // open one frame early: the start of a word is not clipped
+  return mask;
+}
+// Applies the mask to audio made of `frames` equal parts, gliding between frames (10 ms fades).
+function applyMask(audio, mask) {
+  const per = audio.length / mask.length;
+  for (let i = 0; i < audio.length; i++) {
+    const at = i / per - 0.5, t = Math.floor(at), f = at - t;
+    const a = mask[Math.max(0, Math.min(mask.length - 1, t))], b = mask[Math.max(0, Math.min(mask.length - 1, t + 1))];
+    audio[i] *= a + (b - a) * f;
+  }
+}
+
 // One two-second stretch → { audio, rate }. `f0` is its pitch track (FRAMES values, already shifted).
 async function convertWindow(ctx, x16, f0, speaker, noise = null) {
   const { ort, encoder, voice } = ctx;
@@ -173,6 +201,7 @@ async function convertWindow(ctx, x16, f0, speaker, noise = null) {
   for (const name of Object.keys(feed)) if (!voice.inputNames.includes(name)) delete feed[name];
   const out = (await voice.run(feed))[voice.outputNames[0]];
   const audio = out.type === 'float16' ? Float32Array.from(out.data, fromHalf) : Float32Array.from(out.data);
+  applyMask(audio, soundMask(x16, T));
   // The model's sample rate shows in how much audio it made for T frames of 10 ms.
   const per = audio.length / T;
   const rate = [32000, 40000, 44100, 48000].reduce((p, q) => (Math.abs(q / 100 - per) < Math.abs(p / 100 - per) ? q : p));
@@ -212,4 +241,4 @@ async function convert(ctx, mono48, st = 0, onProgress = () => {}, speaker = 0) 
   return out;
 }
 
-module.exports = { gauss, resample, pitchAt, pitchTrack, coarsePitch, load, describeVoice, convertWindow, convert, FRAMES, WINDOW16 };
+module.exports = { soundMask, gauss, resample, pitchAt, pitchTrack, coarsePitch, load, describeVoice, convertWindow, convert, FRAMES, WINDOW16 };
