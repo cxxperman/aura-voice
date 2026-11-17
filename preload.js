@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('auraSystem', {
   aiBase: () => ipcRenderer.invoke('ai:base'),
   aiLive: (on, id, st, speaker) => ipcRenderer.invoke('ai:live', on, id, st, speaker),
   aiLiveSet: (st, speaker) => ipcRenderer.invoke('ai:live-set', st, speaker),
+  getAutostart: () => ipcRenderer.invoke('autostart:get'),
+  setAutostart: (on) => ipcRenderer.invoke('autostart:set', on),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   saveTake: (pcm) => ipcRenderer.invoke('take:save', pcm),

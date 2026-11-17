@@ -2566,6 +2566,12 @@ $('#aiFile').addEventListener('click', async () => {
   aiNote(res.ok ? `Готово: «${res.name}», ${Math.round(res.seconds)} с.` : 'Не получилось сохранить файл.', !res.ok);
 });
 
+/* ───────── Start with Windows ───────── */
+window.auraSystem?.getAutostart?.().then((on) => ($('#autostart').checked = !!on));
+$('#autostart').addEventListener('change', async (e) => {
+  e.target.checked = !!(await window.auraSystem.setAutostart(e.target.checked));
+});
+
 /* ───────── Updates ───────── */
 const updateBtn = $('#updateBtn');
 async function checkUpdate() {

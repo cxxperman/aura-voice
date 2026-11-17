@@ -667,6 +667,15 @@ ipcMain.handle('ai:convert', async (_e, pcm, id, st, speaker) => {
   return res.ok ? { pcm: res.pcm } : { error: res.error || 'Не получилось.' };
 });
 
+/* ───── Start with Windows ───── */
+ipcMain.handle('autostart:get', () => app.isPackaged && app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin);
+ipcMain.handle('autostart:set', (_e, on) => {
+  if (!app.isPackaged) return false;
+  app.setLoginItemSettings({ openAtLogin: !!on, args: ['--hidden'] });
+  refreshTray?.();
+  return app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin;
+});
+
 /* ───── Preset files ───── */
 const presetFilter = [{ name: 'Пресет Aura', extensions: ['json'] }];
 ipcMain.handle('preset:export', async (_e, preset) => {
@@ -932,6 +941,13 @@ app.whenReady().then(() => {
   setInterval(checkAttached, 60000);
   if (!devRun) {
     createTray();
+  // Start with Windows, in the tray, unless the user says otherwise. The choice is made once, on
+  // the first run of an installed copy; after that the switch in Settings (or the tray) decides.
+  const asked = path.join(app.getPath('userData'), 'autostart.set');
+  if (app.isPackaged && !fs.existsSync(asked)) {
+    app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] });
+    try { fs.writeFileSync(asked, '1'); } catch {}
+  }
     // Work from inside a game, without alt-tabbing to the window.
     globalShortcut.register(HOTKEY_POWER, () => command('power'));
     globalShortcut.register(HOTKEY_MUTE, () => command('mute'));
