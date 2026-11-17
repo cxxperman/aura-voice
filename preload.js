@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('auraSystem', {
   aiRemove: (id) => ipcRenderer.invoke('ai:remove', id),
   aiConvert: (pcm, id, st, speaker) => ipcRenderer.invoke('ai:convert', pcm, id, st, speaker),
   aiBase: () => ipcRenderer.invoke('ai:base'),
+  aiLive: (on, id, st, speaker) => ipcRenderer.invoke('ai:live', on, id, st, speaker),
+  aiLiveSet: (st, speaker) => ipcRenderer.invoke('ai:live-set', st, speaker),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   saveTake: (pcm) => ipcRenderer.invoke('take:save', pcm),

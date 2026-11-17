@@ -3,6 +3,9 @@
 const ort = require('onnxruntime-node');
 const ai = require('./ai-convert.js');
 const pth = require('./ai-pth.js');
+const { Live } = require('./ai-live.js');
+
+let live = null;
 
 let ctx = null;
 let loaded = '';
@@ -20,6 +23,24 @@ process.parentPort.on('message', async ({ data }) => {
     } else if (cmd === 'pth') {
       // A shared .pth model → ONNX. The file is only read, never executed (see ai-pth.js).
       post({ id, ok: true, info: pth.convertPth(data.file, data.templates, data.out) });
+    } else if (cmd === 'live-start') {
+      live?.stop();
+      live = null;
+      const key = `${data.encoder}|${data.voice}`;
+      if (key !== loaded) {
+        ctx = await ai.load(ort, data.encoder, data.voice, true);
+        loaded = key;
+      }
+      await ai.convertWindow(ctx, new Float32Array(ai.WINDOW16), new Float32Array(ai.FRAMES), 0); // the first run is slow: do it before going on air
+      live = new Live(ai, ctx, data.file, { st: Number(data.st) || 0, speaker: Number(data.speaker) || 0 }, (m) => post({ id: 0, ...m }));
+      post({ id, ok: true });
+    } else if (cmd === 'live-set') {
+      if (live) { live.st = Number(data.st) || 0; live.speaker = Number(data.speaker) || 0; }
+      post({ id, ok: true });
+    } else if (cmd === 'live-stop') {
+      live?.stop();
+      live = null;
+      post({ id, ok: true });
     } else if (cmd === 'convert') {
       const key = `${data.encoder}|${data.voice}`;
       if (key !== loaded) {

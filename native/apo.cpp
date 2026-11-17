@@ -34,6 +34,7 @@ struct Live {
   std::atomic<bool> enabled{true};
   std::atomic<bool> mute{false};
   std::atomic<int> nsEngine{0};
+  std::atomic<bool> aiLive{false};
   std::atomic<unsigned> playId{0}, playStop{0};
   std::atomic<float> clipGain{1.0f};
   // DeepFilterNet: 0 = not available, 1 = available, -1 = switched off because loading it crashed last time.
@@ -68,6 +69,7 @@ void store(const aura::Settings& s) {
   gLive.enabled.store(s.enabled, std::memory_order_relaxed);
   gLive.mute.store(s.mute, std::memory_order_relaxed);
   gLive.nsEngine.store(s.nsEngine, std::memory_order_relaxed);
+  gLive.aiLive.store(s.aiLive, std::memory_order_relaxed);
   gLive.playId.store(s.playId, std::memory_order_relaxed);
   gLive.playStop.store(s.playStop, std::memory_order_relaxed);
   gLive.clipGain.store(s.clipGain, std::memory_order_relaxed);
@@ -264,6 +266,48 @@ void deepHousekeeping() {
 }
 #endif
 
+// ───── Live AI voice ─────
+// A neural voice cannot be computed in here: it needs the graphics card and a runtime of hundreds
+// of megabytes, and a stall would silence every program's sound. So the window computes it, and
+// the two meet in a file both map into memory (layout: ai-live.js). The module writes the voice
+// its own chain made, and plays what comes back about half a second later. The file is created
+// by the window; the view, once mapped, stays for the life of the process, so the audio thread
+// can never be left holding a pointer to memory that has gone.
+constexpr uint32_t kLiveMagic = 0x4c525541; // "AURL"
+constexpr uint32_t kLiveN = 1u << 17;
+struct LiveShared {
+  uint32_t magic;
+  volatile uint32_t capW;  // samples the module has written to cap
+  volatile uint32_t playW; // samples the window has written to play
+  uint32_t reserved[13];
+  float cap[kLiveN];
+  float play[kLiveN];
+};
+std::atomic<LiveShared*> gLiveMap{nullptr};
+std::atomic<void*> gLiveOwner{nullptr}; // the one stream that writes cap; any stream may play
+
+void liveOpen() { // watcher thread only
+  if (gLiveMap.load()) return;
+  const std::wstring path = aura::dataDir() + L"\\live.bin";
+  const HANDLE f = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (f == INVALID_HANDLE_VALUE) return;
+  LARGE_INTEGER size;
+  if (GetFileSizeEx(f, &size) && size.QuadPart == LONGLONG(sizeof(LiveShared))) {
+    if (const HANDLE m = CreateFileMappingW(f, nullptr, PAGE_READWRITE, 0, 0, nullptr)) {
+      auto* view = static_cast<LiveShared*>(MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LiveShared)));
+      if (view && view->magic == kLiveMagic) {
+        VirtualLock(view, sizeof(LiveShared)); // best effort: keep the audio thread clear of page faults
+        gLiveMap.store(view);
+      } else if (view) {
+        UnmapViewOfFile(view);
+      }
+      CloseHandle(m); // the view keeps the mapping alive
+    }
+  }
+  CloseHandle(f);
+}
+
 DWORD WINAPI watch(void*) {
   const std::wstring settings = aura::dataDir() + L"\\settings.txt";
   const std::wstring status = aura::dataDir() + L"\\status.txt";
@@ -280,6 +324,7 @@ DWORD WINAPI watch(void*) {
       loadClip();
     }
     sweepRetiredClips();
+    if (tick % 10 == 0 && gLive.aiLive.load()) liveOpen();
 #ifdef AURA_HAVE_DFN
     if (tick % 50 == 0) {
       deepAllowed(false);
@@ -475,6 +520,8 @@ class AuraApo final : public INonDelegatingUnknown,
     return S_OK;
   }
   STDMETHODIMP UnlockForProcess() override {
+    void* me = this;
+    gLiveOwner.compare_exchange_strong(me, nullptr);
     if (!locked_) return APOERR_ALREADY_UNLOCKED;
     locked_ = false;
     leave();
@@ -533,6 +580,7 @@ class AuraApo final : public INonDelegatingUnknown,
     if (s.dereverb > 0.005f) dereverb_.process(mono_.data(), int(frames), s.dereverb);
     chain_.setParams(s.params);
     chain_.process(mono_.data(), left_.data(), right_.data(), int(frames));
+    liveExchange(frames);
 
     // Crossfade between the untouched microphone and the processed voice when toggled.
     const float step = (target - mix_) / float(frames);
@@ -591,6 +639,51 @@ class AuraApo final : public INonDelegatingUnknown,
     gInstances.erase(std::remove(gInstances.begin(), gInstances.end(), this), gInstances.end());
     ReleaseSRWLockExclusive(&gInstancesLock);
     watchRelease();
+  }
+
+  // Live AI voice: give the window the voice, take the converted one back (audio thread).
+  void liveExchange(UINT32 frames) {
+    LiveShared* live = gLive.aiLive.load(std::memory_order_relaxed) && sampleRate_ == 48000.0f ? gLiveMap.load(std::memory_order_acquire) : nullptr;
+    if (!live) {
+      livePlaying_ = false;
+      return;
+    }
+    const uint32_t mask = kLiveN - 1;
+    void* nobody = nullptr;
+    if (gLiveOwner.load(std::memory_order_relaxed) == this || gLiveOwner.compare_exchange_strong(nobody, this)) {
+      const uint32_t w = live->capW;
+      for (UINT32 i = 0; i < frames; i++) live->cap[(w + i) & mask] = 0.5f * (left_[i] + right_[i]);
+      live->capW = w + frames;
+    }
+    const uint32_t pw = live->playW;
+    if (pw != liveSeen_) {
+      liveSeen_ = pw;
+      liveIdle_ = 0;
+    } else if (liveIdle_ < 1000000) {
+      liveIdle_ += frames;
+    }
+    if (liveIdle_ > 48000) { // nothing has come back for a second: the window is gone or cannot keep up — the ordinary voice
+      livePlaying_ = false;
+      liveHold_ = 0;
+      liveRead_ = pw;
+      return;
+    }
+    // The voice comes back in pieces of 0.24 s, one every 0.24 s give or take. Playing starts 80 ms
+    // after a piece arrives, so the next one has that much grace; nothing that arrived is thrown
+    // away unless more than 0.6 s is waiting, which means we fell behind.
+    const uint32_t cushion = 3840, most = 28800;
+    uint32_t waiting = pw - liveRead_;
+    if (waiting > kLiveN / 2) { liveRead_ = pw; waiting = 0; livePlaying_ = false; liveHold_ = 0; }
+    if (waiting > most) { liveRead_ = pw - 11520; waiting = 11520; }
+    for (UINT32 i = 0; i < frames; i++) {
+      float s = 0;
+      if (!livePlaying_ && waiting > 0 && ++liveHold_ >= cushion) livePlaying_ = true;
+      if (livePlaying_) {
+        if (waiting > 0) { s = live->play[liveRead_ & mask]; liveRead_++; waiting--; }
+        else { livePlaying_ = false; liveHold_ = 0; } // ran dry: silence, and the grace period again
+      }
+      left_[i] = right_[i] = s;
+    }
   }
 
   void measureLoudness(const float* samples, UINT32 frames, UINT32 ch) {
@@ -666,6 +759,8 @@ class AuraApo final : public INonDelegatingUnknown,
   float meanSquare_[2] = {0, 0};
   float loudnessCoef_ = 0;
   std::vector<float> mono_, left_, right_;
+  uint32_t liveRead_ = 0, liveSeen_ = 0, liveIdle_ = 0, liveHold_ = 0;
+  bool livePlaying_ = false;
 };
 
 class Factory final : public IClassFactory {

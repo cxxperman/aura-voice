@@ -33,25 +33,27 @@ function resample(x, from, to) {
 // Pitch at 100 frames a second from 16 kHz audio: normalised autocorrelation, then the two things
 // a generator that follows the pitch exactly cannot forgive — single-frame jumps and octave slips
 // — are cleaned up. 0 = unvoiced.
+// One frame: Hz, 0 = unvoiced, -1 = its analysis window does not fit inside the audio.
+function pitchAt(x16, t, top) {
+  const W = 1024, at = t * 160 - W / 2;
+  if (at < 0 || at + W + 330 >= x16.length) return -1;
+  let e0 = 1e-12;
+  for (let i = 0; i < W; i += 2) e0 += x16[at + i] * x16[at + i];
+  if (Math.sqrt(e0 / (W / 2)) < top * 0.02) return 0;
+  let best = 0, lag0 = 0;
+  for (let lag = 32; lag <= 320; lag++) { // 500 … 50 Hz
+    let c = 0, e1 = 1e-12;
+    for (let i = 0; i < W; i += 2) { c += x16[at + i] * x16[at + i + lag]; e1 += x16[at + i + lag] * x16[at + i + lag]; }
+    const s = c / Math.sqrt(e0 * e1);
+    if (s > best * 1.04) { best = s; lag0 = lag; } // of near-equal peaks the shortest lag: the true period, not its double
+  }
+  return best > 0.5 && lag0 ? 16000 / lag0 : 0;
+}
 function pitchTrack(x16, frames) {
-  const W = 1024, f0 = new Float32Array(frames);
+  const f0 = new Float32Array(frames);
   let top = 1e-9;
   for (let i = 0; i < x16.length; i += 37) top = Math.max(top, Math.abs(x16[i]));
-  for (let t = 0; t < frames; t++) {
-    const at = t * 160 - W / 2;
-    if (at < 0 || at + W + 330 >= x16.length) continue;
-    let e0 = 1e-12;
-    for (let i = 0; i < W; i += 2) e0 += x16[at + i] * x16[at + i];
-    if (Math.sqrt(e0 / (W / 2)) < top * 0.02) continue;
-    let best = 0, lag0 = 0;
-    for (let lag = 32; lag <= 320; lag++) { // 500 … 50 Hz
-      let c = 0, e1 = 1e-12;
-      for (let i = 0; i < W; i += 2) { c += x16[at + i] * x16[at + i + lag]; e1 += x16[at + i + lag] * x16[at + i + lag]; }
-      const s = c / Math.sqrt(e0 * e1);
-      if (s > best * 1.04) { best = s; lag0 = lag; } // of near-equal peaks the shortest lag: the true period, not its double
-    }
-    if (best > 0.5 && lag0) f0[t] = 16000 / lag0;
-  }
+  for (let t = 0; t < frames; t++) f0[t] = Math.max(0, pitchAt(x16, t, top));
   // Octave slips against the local median, then a 5-frame median.
   const voiced = Array.from(f0).filter((v) => v > 0).sort((a, b) => a - b);
   const mid = voiced.length ? voiced[voiced.length >> 1] : 0;
@@ -145,7 +147,7 @@ const FRAMES = 200;
 const WINDOW16 = 400 + (FRAMES / 2 - 1) * 320; // 16 kHz samples that give the encoder exactly FRAMES / 2 frames
 
 // One two-second stretch → { audio, rate }. `f0` is its pitch track (FRAMES values, already shifted).
-async function convertWindow(ctx, x16, f0, speaker) {
+async function convertWindow(ctx, x16, f0, speaker, noise = null) {
   const { ort, encoder, voice } = ctx;
   const enc = await encoder.run({ [encoder.inputNames[0]]: new ort.Tensor('float32', x16, [1, 1, x16.length]) });
   const emb = enc[encoder.outputNames[0]]; // [1, T0, C] at 50 a second
@@ -162,7 +164,7 @@ async function convertWindow(ctx, x16, f0, speaker) {
   const who = new ort.Tensor('int64', BigInt64Array.from([BigInt(speaker)]), [1]);
   const featTensor = info.half ? new ort.Tensor('float16', Uint16Array.from(feats, toHalf), [1, T, C]) : new ort.Tensor('float32', feats, [1, T, C]);
   const feed = info.layout === 'rvc'
-    ? { phone: featTensor, phone_lengths: len, ds: who, rnd: new ort.Tensor('float32', gauss(192 * T), [1, 192, T]) }
+    ? { phone: featTensor, phone_lengths: len, ds: who, rnd: new ort.Tensor('float32', noise || gauss(192 * T), [1, 192, T]) }
     : { feats: featTensor, p_len: len, sid: who };
   if (info.pitched) {
     feed.pitch = new ort.Tensor('int64', coarsePitch(f0), [1, T]);
@@ -210,4 +212,4 @@ async function convert(ctx, mono48, st = 0, onProgress = () => {}, speaker = 0) 
   return out;
 }
 
-module.exports = { resample, pitchTrack, coarsePitch, load, describeVoice, convertWindow, convert };
+module.exports = { gauss, resample, pitchAt, pitchTrack, coarsePitch, load, describeVoice, convertWindow, convert, FRAMES, WINDOW16 };

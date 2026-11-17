@@ -238,6 +238,7 @@ function systemLines(enabled, live = true) {
     `dereverb=${state.g.dereverb}`,
     `loud=${state.loud || 0}`,
     `dehum=${state.dehum ? 1 : 0}`,
+    ...(live ? [`ailive=${aiLiveOn ? 1 : 0}`] : []), // the module plays the voice the window converts
     ...Object.entries(fxValues()).map(([k, value]) => `${k}=${value}`),
     `ingain=${state.inGain}`,
     `outgain=${state.outGain}`,
@@ -2359,6 +2360,39 @@ const aiNote = (text, warn = false) => {
   $('#aiNote').className = warn ? 'footnote warn' : 'footnote';
 };
 let aiBusy = false;
+let aiLiveOn = false; // this session only: the live voice never starts by itself
+const AI_LIVE_IDLE = $('#aiLiveText').textContent;
+async function setAiLive(on) {
+  const box = $('#aiLive');
+  if (on) {
+    if (!sys.installed) { box.checked = false; return aiNote('Живой режим работает через модуль в микрофоне: встройте его в Настройках.', true); }
+    if (!engine.running) { box.checked = false; return aiNote('Сначала включите сферу.', true); }
+    aiNote('Загружаю нейросеть…');
+    const res = await window.auraSystem.aiLive(true, state.aiVoice, state.aiPitch || 0, state.aiSpeaker || 0);
+    if (res.error) { box.checked = false; return aiNote(res.error, true); }
+    aiNote('В эфире выбранный голос. Собеседники слышат вас с опозданием около полсекунды.');
+  } else {
+    await window.auraSystem.aiLive(false);
+    $('#aiLiveText').textContent = AI_LIVE_IDLE;
+    aiNote('');
+  }
+  aiLiveOn = on;
+  box.checked = on;
+  pushSystem();
+}
+$('#aiLive').addEventListener('change', (e) => setAiLive(e.target.checked));
+// How the conversion is keeping up, while it runs.
+setInterval(async () => {
+  if (!aiLiveOn) return;
+  const s = await window.auraSystem.aiStatus();
+  if (!s.live?.on) { // the worker stopped: the module falls back to the ordinary voice by itself
+    aiLiveOn = false;
+    $('#aiLive').checked = false;
+    pushSystem();
+    return aiNote(s.live?.error ? `Живой режим остановился: ${s.live.error}` : 'Живой режим остановился.', true);
+  }
+  if (s.live.ms) $('#aiLiveText').textContent = `В эфире. На каждые 240 мс звука уходит ${s.live.ms} мс расчёта (в худшем случае ${s.live.worst})${s.live.late ? `; не успел ${s.live.late} раз — звук прерывался` : ''}.`;
+}, 1500);
 async function renderAi() {
   const s = await window.auraSystem.aiStatus();
   $('#aiEngineTitle').textContent = s.encoder ? 'Нейросеть готова' : 'Нужен компонент для ИИ-голосов';
@@ -2391,7 +2425,7 @@ async function renderAi() {
     num.value = state.aiSpeaker;
     num.className = 'ai-speaker';
     num.setAttribute('aria-label', 'Номер тембра');
-    num.addEventListener('change', () => { state.aiSpeaker = clamp(Math.round(Number(num.value) || 0), 0, s.base.speakers - 1); num.value = state.aiSpeaker; state.aiVoice = 'base'; save(); });
+    num.addEventListener('change', () => { state.aiSpeaker = clamp(Math.round(Number(num.value) || 0), 0, s.base.speakers - 1); num.value = state.aiSpeaker; state.aiVoice = 'base'; save(); if (aiLiveOn) window.auraSystem.aiLiveSet(state.aiPitch || 0, state.aiSpeaker); });
     openKind.textContent = `тембр № из ${s.base.speakers}`;
     open.append(pick, openName, openKind, num);
   } else {
@@ -2437,6 +2471,7 @@ async function renderAi() {
       : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Свои голоса: файл модели RVC второго поколения — .pth (как их обычно выкладывают; Aura сама переведёт его в нужный вид, не запуская ничего из файла) или .onnx. Файл .index не нужен.' })])
   );
   for (const id of ['aiTry', 'aiFile']) $('#' + id).disabled = aiBusy || !s.encoder || !state.aiVoice;
+  $('#aiLive').disabled = (!s.encoder || !state.aiVoice) && !aiLiveOn;
   if (s.downloading != null || s.base.downloading != null) setTimeout(renderAi, 700);
 }
 $('#aiGet').addEventListener('click', async () => {
@@ -2459,6 +2494,7 @@ $('#aiPitch').addEventListener('input', (e) => {
   $('#aiPitchVal').textContent = (state.aiPitch > 0 ? '+' : '') + state.aiPitch;
   fill(e.target);
   save();
+  if (aiLiveOn) window.auraSystem.aiLiveSet(state.aiPitch, state.aiSpeaker || 0);
 });
 async function aiRun(mono, label) {
   aiBusy = true;

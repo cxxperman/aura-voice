@@ -567,6 +567,7 @@ const aiList = () => {
 const aiSave = (list) => fs.writeFileSync(path.join(aiDir(), 'voices.json'), JSON.stringify(list, null, 2));
 let aiDownload = null; // fraction while the encoder is being fetched
 let aiProgress = null; // fraction while a conversion runs
+let aiLive = null; // { on, ms, worst, late } while the live voice runs
 let aiChild = null;
 let aiSeq = 0;
 const aiWaiting = new Map();
@@ -575,12 +576,15 @@ function aiAsk(msg) {
     aiChild = utilityProcess.fork(path.join(__dirname, 'ai-worker.js'), [], { serviceName: 'Aura AI voices' });
     aiChild.on('message', (m) => {
       if (m.progress != null) return (aiProgress = m.progress);
+      if (m.live) return (aiLive = { ...m.live, on: true });
+      if (m.id === 0 && m.error) return (aiLive = { on: !!aiLive?.on, error: m.error });
       const done = aiWaiting.get(m.id);
       aiWaiting.delete(m.id);
       done?.(m);
     });
     aiChild.on('exit', () => {
       aiChild = null;
+      aiLive = null;
       for (const done of aiWaiting.values()) done({ ok: false, error: 'Процесс ИИ-голосов завершился' });
       aiWaiting.clear();
     });
@@ -591,7 +595,7 @@ function aiAsk(msg) {
     aiChild.postMessage({ ...msg, id });
   });
 }
-ipcMain.handle('ai:status', () => ({ encoder: !!aiEncoder(), megabytes: Math.round(AI_ENCODER.size / 1e6), downloading: aiDownload, converting: aiProgress, voices: aiList(), base: { present: !!aiBase(), megabytes: Math.round(AI_BASE.size / 1e6), downloading: aiBaseDownload, speakers: AI_BASE.speakers } }));
+ipcMain.handle('ai:status', () => ({ encoder: !!aiEncoder(), megabytes: Math.round(AI_ENCODER.size / 1e6), downloading: aiDownload, converting: aiProgress, live: aiLive, voices: aiList(), base: { present: !!aiBase(), megabytes: Math.round(AI_BASE.size / 1e6), downloading: aiBaseDownload, speakers: AI_BASE.speakers } }));
 ipcMain.handle('ai:download', async () => {
   if (aiDownload != null || aiEncoder()) return !!aiEncoder();
   aiDownload = 0;
@@ -632,6 +636,25 @@ ipcMain.handle('ai:remove', (_e, id) => {
   if (typeof id !== 'string' || !aiVoiceId.test(id)) return false;
   aiSave(aiList().filter((v) => v.id !== id));
   fs.rm(path.join(aiDir(), id + '.onnx'), { force: true }, () => {});
+  return true;
+});
+// Live: the worker converts the voice the module hands it through %ProgramData%\\Aura\\live.bin.
+ipcMain.handle('ai:live', async (_e, on, id, st, speaker) => {
+  if (!on) {
+    if (aiChild) await aiAsk({ cmd: 'live-stop' });
+    aiLive = null;
+    return { ok: true };
+  }
+  const encoder = aiEncoder();
+  const voiceFile = id === 'base' ? aiBase() : typeof id === 'string' && aiVoiceId.test(id) ? path.join(aiDir(), id + '.onnx') : null;
+  if (!encoder || !voiceFile) return { error: 'Сначала скачайте компонент и выберите голос.' };
+  const res = await aiAsk({ cmd: 'live-start', encoder, voice: voiceFile, file: path.join(dataDir, 'live.bin'), st: Math.max(-24, Math.min(24, Number(st) || 0)), speaker: id === 'base' ? Math.max(0, Math.min(AI_BASE.speakers - 1, Math.round(Number(speaker) || 0))) : 0 });
+  if (!res.ok) return { error: res.error || 'Не получилось запустить.' };
+  aiLive = { on: true };
+  return { ok: true };
+});
+ipcMain.handle('ai:live-set', async (_e, st, speaker) => {
+  if (aiChild && aiLive?.on) await aiAsk({ cmd: 'live-set', st: Math.max(-24, Math.min(24, Number(st) || 0)), speaker: Math.max(0, Math.min(AI_BASE.speakers - 1, Math.round(Number(speaker) || 0))) });
   return true;
 });
 ipcMain.handle('ai:convert', async (_e, pcm, id, st, speaker) => {
