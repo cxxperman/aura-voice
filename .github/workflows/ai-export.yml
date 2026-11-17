@@ -28,7 +28,7 @@ jobs:
       - name: Base models
         run: |
           mkdir -p base out
-          for name in f0G40k f0G48k; do
+          for name in f0G32k f0G40k f0G48k; do
             curl -L --fail --silent --show-error -o base/$name.pth https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/pretrained_v2/$name.pth
           done
           ls -l base

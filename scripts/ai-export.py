@@ -80,7 +80,37 @@ def check(out_path, rate, speakers):
     print(" speakers differ from speaker 0 by rms:", [round(float(np.sqrt(((o - outs[0]) ** 2).mean())), 4) for o in outs[1:]])
 
 
-for name, cfg in [("f0G40k", "rvc/configs/v1/40k.json"), ("f0G48k", "rvc/configs/v2/48k.json")]:
+def template(out_path):
+    # The network without its numbers: every weight keeps its name and shape and loses its data.
+    # Aura's .pth converter pours a user's weights into this.
+    import onnx
+
+    m = onnx.load(out_path)
+    for init in m.graph.initializer:
+        init.ClearField("raw_data")
+        init.ClearField("float_data")
+    onnx.save(m, out_path.replace("-base-", "-").replace(".onnx", ".template.onnx"))
+
+
+def packaged(weights_path, config_path, out_path, sr_name):
+    # A model file as RVC's training writes it for users (half-precision weights, config, labels):
+    # the test input for the converter.
+    c = json.load(open(config_path))
+    d, m, t = c["data"], c["model"], c["train"]
+    state = torch.load(weights_path, map_location="cpu")["model"]
+    weight = {k: v.half() for k, v in state.items() if "enc_q" not in k}
+    config = [
+        d["filter_length"] // 2 + 1, t["segment_size"] // d["hop_length"], m["inter_channels"], m["hidden_channels"],
+        m["filter_channels"], m["n_heads"], m["n_layers"], m["kernel_size"], m["p_dropout"], m["resblock"],
+        m["resblock_kernel_sizes"], m["resblock_dilation_sizes"], m["upsample_rates"], m["upsample_initial_channel"],
+        m["upsample_kernel_sizes"], m["spk_embed_dim"], m["gin_channels"], d["sampling_rate"],
+    ]
+    torch.save({"weight": weight, "config": config, "info": "converter test", "sr": sr_name, "f0": 1, "version": "v2"}, out_path)
+
+
+for name, cfg in [("f0G32k", "rvc/configs/v2/32k.json"), ("f0G40k", "rvc/configs/v1/40k.json"), ("f0G48k", "rvc/configs/v2/48k.json")]:
     out = f"out/rvc-v2-base-{name[3:]}.onnx"
     rate, speakers = export(cfg, f"base/{name}.pth", out)
     check(out, rate, speakers)
+    template(out)
+packaged("base/f0G48k.pth", "rvc/configs/v2/48k.json", "out/test-48k.pth", "48k")
