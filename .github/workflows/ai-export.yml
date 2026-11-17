@@ -1,0 +1,41 @@
+name: ai-export
+
+# Exports RVC's own base model (v2, trained by the RVC project on the open VCTK corpus) to ONNX
+# with the project's official exporter. The result is the reference voice model for Aura's
+# «ИИ-голоса»: a legitimate test voice, and the template the .pth converter is built against.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/ai-export.yml
+      - scripts/ai-export.py
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: RVC sources (the last tag that ships the ONNX exporter)
+        run: git clone --depth 1 --branch 2.2.231006 https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI rvc
+      - name: Python packages
+        run: |
+          pip install --quiet torch==2.1.2 --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet numpy==1.23.5 onnx==1.15.0 onnxruntime==1.17.1
+      - name: Base models
+        run: |
+          mkdir -p base out
+          for name in f0G40k f0G48k; do
+            curl -L --fail --silent --show-error -o base/$name.pth https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/pretrained_v2/$name.pth
+          done
+          ls -l base
+          sha256sum base/*
+      - name: Export
+        run: python scripts/ai-export.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rvc-base-onnx
+          path: out/
