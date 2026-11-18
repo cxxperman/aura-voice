@@ -632,3 +632,8 @@ h2 { font-size: 28px; font-weight: 600; }
 /* Switches are the same in every dev.txt app: orange track, dark knob */
 .switch input:checked + i { background: var(--dt-brand); }
 .switch input:checked + i::after { background: rgb(0 0 0 / 0.894); }
+/* Sliders are the same in every dev.txt app: orange fill, a dark disc with an orange dot (Windows 11 thumb) */
+input[type='range']::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--dt-brand) var(--p), rgb(255 255 255 / 0.544) var(--p)); }
+input[type='range']::-webkit-slider-thumb { background: radial-gradient(circle, var(--dt-brand) 0 5px, #454545 6px); box-shadow: 0 0 0 1px rgb(255 255 255 / 0.09); }
+input[type='range']:hover::-webkit-slider-thumb { background: radial-gradient(circle, var(--dt-brand) 0 6px, #454545 7px); }
+input[type='range']:active::-webkit-slider-thumb { transform: none; background: radial-gradient(circle, var(--dt-brand) 0 4px, #454545 5px); }
