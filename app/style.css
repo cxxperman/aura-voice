@@ -615,3 +615,20 @@ html.mica body.on .backdrop { opacity: 0.6; }
 .switch:hover input:checked + i::after { transform: translateX(19px); }
 .switch:active input:checked + i::after { transform: translateX(16px); }
 .switch input:focus-visible + i, :focus-visible { outline: 2px solid var(--label); outline-offset: 2px; }
+
+/* ───────── One family with the other dev.txt windows (kit.txt, NavShell) ─────────
+ * Sections on the left: 38 high, plain icon and label, the selected one — a soft fill and the orange
+ * dev.txt pill on the left. Page title 28 semibold, as in core.txt, metla.txt and kapsula.txt. */
+.tabs button { height: 38px; padding: 0 12px 0 14px; gap: 14px; border: 0; font-size: 14px; font-weight: 400; color: var(--label); transition: background 83ms linear; }
+.tabs svg { width: 18px; height: 18px; stroke: var(--label); }
+.tabs button:hover { background: rgb(255 255 255 / 0.06); }
+.tabs button[aria-selected='true'] { background: rgb(255 255 255 / 0.08); border: 0; box-shadow: none; color: var(--label); }
+.tabs button[aria-selected='true']::before {
+  content: ''; position: absolute; left: 0; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 1.5px;
+  background: var(--dt-brand); animation: tab-pill 250ms cubic-bezier(0, 0, 0, 1);
+}
+@keyframes tab-pill { from { transform: scaleY(0.4); opacity: 0; } to { transform: none; opacity: 1; } }
+h2 { font-size: 28px; font-weight: 600; }
+/* Switches are the same in every dev.txt app: orange track, dark knob */
+.switch input:checked + i { background: var(--dt-brand); }
+.switch input:checked + i::after { background: rgb(0 0 0 / 0.894); }
