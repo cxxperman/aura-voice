@@ -824,6 +824,18 @@ ipcMain.on('hub:result', (_e, id, ok, error) => {
 });
 ipcMain.handle('hub:theme', () => hubTheme);
 
+/* The way to core.txt, the dev.txt launcher: open it, or fetch it when it is not on this computer.
+ * Every dev.txt app carries this in one quiet place (kit.txt, hub/CoreApp.cs is the same thing for C#). */
+const CORE_URL = 'https://github.com/cxxperman/core.txt/releases/latest/download/Core.exe';
+const corePath = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'dev.txt', 'Core.exe');
+const coreInstalled = () => { try { return fs.existsSync(corePath); } catch { return false; } };
+ipcMain.handle('core:info', () => ({ online: !!hub?.online, installed: coreInstalled() }));
+ipcMain.handle('core:go', async () => {
+  if (hub?.online) { await hub.command('core', 'show', null); return; }
+  if (coreInstalled()) { const { spawn } = require('child_process'); spawn(corePath, [], { detached: true, stdio: 'ignore' }).unref(); return; }
+  await shell.openExternal(CORE_URL);
+});
+
 /* ───── System module (APO) ───── */
 const dataDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'Aura');
 const binDir = app.isPackaged ? path.join(process.resourcesPath, 'native') : path.join(__dirname, 'native', 'bin');

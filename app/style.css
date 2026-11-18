@@ -162,7 +162,9 @@ h1 {
 .update-chip[hidden] { display: none; }
 .update-chip:active { transform: scale(0.96); transition-duration: 80ms; }
 .update-chip:disabled { opacity: 0.6; cursor: default; }
-.devices > .switch + .switch::before { content: ''; position: absolute; left: 18px; right: 0; top: 0; height: 0.5px; background: var(--sep); }
+.devices > .switch.core-row { cursor: default; }
+.switch.core-row[hidden] { display: none; }
+.switch + .switch::before { content: ''; position: absolute; left: 18px; right: 0; top: 0; height: 0.5px; background: var(--sep); }
 .fx-chip:active { transform: scale(0.96); transition-duration: 80ms; }
 
 /* Navigation: a macOS sidebar list. The selected row is filled with the accent colour. */

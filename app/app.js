@@ -2985,3 +2985,25 @@ async function boot() {
   }
 }
 boot();
+
+/* ───── The way to core.txt ─────
+ * One quiet row in the settings: open the launcher, or fetch it when it is not here yet. */
+(function coreRow() {
+  const row = document.getElementById('coreRow'), btn = document.getElementById('coreBtn'), hint = document.getElementById('coreHint');
+  const sys = window.auraSystem;
+  if (!row || !btn || !sys?.coreInfo) return;
+  async function paint() {
+    const info = await sys.coreInfo().catch(() => null);
+    if (!info) return;
+    const here = info.online || info.installed;
+    btn.textContent = here ? 'Открыть core.txt' : 'Скачать core.txt';
+    btn.classList.toggle('prominent', !here);
+    hint.textContent = here
+      ? 'Обновления, общие настройки и остальные приложения dev.txt — в одном окне'
+      : 'Все приложения dev.txt в одном окне: установка, обновления и общие настройки. Aura работает и без него';
+    row.hidden = false;
+  }
+  btn.addEventListener('click', async () => { await sys.coreGo().catch(() => {}); setTimeout(paint, 1500); });
+  window.addEventListener('focus', paint);
+  paint();
+})();

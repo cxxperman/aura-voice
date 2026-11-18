@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('auraSystem', {
   catalogSound: (item) => ipcRenderer.invoke('uwu:sound', item),
   catalogAdd: (item) => ipcRenderer.invoke('uwu:add', item),
   openCatalogSite: () => ipcRenderer.invoke('uwu:open'),
+  coreInfo: () => ipcRenderer.invoke('core:info'),
+  coreGo: () => ipcRenderer.invoke('core:go'),
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
   aiStatus: () => ipcRenderer.invoke('ai:status'),
   aiDownload: () => ipcRenderer.invoke('ai:download'),

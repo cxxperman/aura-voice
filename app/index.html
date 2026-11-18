@@ -192,6 +192,7 @@
           <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Обычный — RNNoise, 10 мс (рекомендуется)</option><option value="1">Жёсткий — DeepFilterNet, 30 мс: давит шум сильнее, но меняет голос</option></select></label>
           <label class="switch"><span><b>Запускать вместе с Windows</b><small>Aura открывается свёрнутой в трей, обработка голоса работает сразу</small></span><input type="checkbox" id="autostart"><i></i></label>
           <label class="switch"><span><b>Проверять обновления</b><small>При запуске спрашивает у GitHub, вышла ли новая версия. Устанавливается только по вашему нажатию</small></span><input type="checkbox" id="autoUpdate"><i></i></label>
+          <div class="switch core-row" id="coreRow" hidden><span><b>core.txt — лаунчер dev.txt</b><small id="coreHint"></small></span><button type="button" class="pill small" id="coreBtn">Открыть core.txt</button></div>
           <label class="switch"><span><b>Убрать гул сети</b><small>Вырезает 50 Гц и его гармоники — гудение от розетки и плохой земли</small></span><input type="checkbox" id="dehum"><i></i></label>
           <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
           <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
