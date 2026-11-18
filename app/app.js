@@ -3,6 +3,8 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const TEST = new URLSearchParams(location.search).has('test');
 const PROBE = new URLSearchParams(location.search).has('probe');
 const DATA = new URLSearchParams(location.search).get('data'); // dev only: worst-case fixtures, see dev-fixtures.js
+// Windows 11 draws Mica behind the window: the page leaves its own background off (see «Windows 11» in style.css)
+if (new URLSearchParams(location.search).has('mica')) document.documentElement.classList.add('mica');
 let fixture = null;
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 

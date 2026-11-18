@@ -585,3 +585,33 @@ kbd.failed { background: var(--red); color: #fff; }
 
 /* имя продукта: подпись .txt приглушена, как во всех приложениях dev.txt */
 .intro-name span { color: var(--label-2); }
+
+/* ───────── Windows 11 ─────────
+ * Like the other dev.txt apps: Mica behind the window, Windows 11 switches and buttons,
+ * corners 4 on controls and 8 on panels, text by the Windows type ramp. The character's colour stays. */
+body { font-size: 14px; }
+html.mica, html.mica body { background: transparent; }
+html.mica .backdrop { opacity: 0.25; }
+html.mica body.on .backdrop { opacity: 0.6; }
+
+/* Buttons: 4 px corners, a flat fill with a thin stroke, no jumping when pressed */
+.pill { border-radius: var(--dt-radius-control); font-size: 14px; font-weight: 400; border-top-color: var(--edge); transition: background 83ms linear, opacity 167ms linear; }
+.pill.small { border-radius: var(--dt-radius-control); font-size: 12px; }
+.pill:active, .pill.held { transform: none; opacity: 0.8; }
+.pill.prominent, .pill.live, .pill.held { box-shadow: none; }
+.pill.prominent:hover, .pill.live:hover { filter: none; background: color-mix(in srgb, var(--accent-solid) 90%, transparent); }
+
+/* Switch: 40×20, an empty outlined track with a grey knob; on — the accent fill and a white knob */
+.switch small { font-size: 12px; }
+.switch i { width: 40px; height: 20px; border-radius: 10px; background: rgb(255 255 255 / 0.06); box-shadow: inset 0 0 0 1px var(--label-2); transition: background 83ms linear; }
+.switch i::after {
+  top: 4px; left: 4px; width: 12px; height: 12px; background: var(--label-2); box-shadow: none;
+  transition: transform 167ms cubic-bezier(0, 0, 0, 1), width 167ms cubic-bezier(0, 0, 0, 1), height 167ms cubic-bezier(0, 0, 0, 1), top 167ms cubic-bezier(0, 0, 0, 1), left 167ms cubic-bezier(0, 0, 0, 1);
+}
+.switch:hover i::after { top: 3px; left: 3px; width: 14px; height: 14px; }
+.switch:active i::after { width: 17px; }
+.switch input:checked + i { background: var(--accent-solid); box-shadow: none; }
+.switch input:checked + i::after { background: #fff; transform: translateX(20px); }
+.switch:hover input:checked + i::after { transform: translateX(19px); }
+.switch:active input:checked + i::after { transform: translateX(16px); }
+.switch input:focus-visible + i, :focus-visible { outline: 2px solid var(--label); outline-offset: 2px; }

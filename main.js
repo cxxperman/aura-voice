@@ -34,15 +34,20 @@ const HOTKEY_POWER = 'Ctrl+Shift+F9';
 const HOTKEY_MUTE = 'Ctrl+Shift+F10';
 let hotkeys = { power: HOTKEY_POWER, mute: HOTKEY_MUTE }; // what the window last asked for
 
+// Mica — the Windows 11 window material — from 22H2 (build 22621) on. Off for dev screenshots: they render offscreen.
+const micaOk = () => process.platform === 'win32' && Number(String(require('os').release()).split('.')[2] || 0) >= 22621;
+
 function createWindow() {
   nativeTheme.themeSource = 'dark'; // Aura is a dark room whatever Windows is set to: its light needs darkness behind it
+  const mica = micaOk() && !shotArg;
   win = new BrowserWindow({
     width: 1060,
     height: 900,
     minWidth: 940,
     minHeight: 700,
     show: false,
-    backgroundColor: '#09090d',
+    backgroundColor: mica ? '#00000000' : '#202020',
+    ...(mica ? { backgroundMaterial: 'mica' } : {}),
     title: 'aura.txt',
     icon: asset('icon.ico'),
     titleBarStyle: 'hidden',
@@ -66,7 +71,7 @@ function createWindow() {
   // Chromium remembers the zoom per profile, so dev runs always set it — back to 1 unless asked otherwise.
   if (devRun) win.webContents.once('did-finish-load', () => win.webContents.setZoomFactor(zoomArg ? Number(zoomArg.slice('--zoom='.length)) : 1));
   win.loadFile(path.join(__dirname, 'app', 'index.html'), {
-    query: { ...(testMode ? { test: '1' } : probeMode ? { probe: '1' } : {}), ...(tabArg ? { tab: tabArg.slice('--tab='.length) } : {}), ...(devRun && dataArg ? { data: dataArg.slice('--data='.length) } : {}) },
+    query: { ...(testMode ? { test: '1' } : probeMode ? { probe: '1' } : {}), ...(tabArg ? { tab: tabArg.slice('--tab='.length) } : {}), ...(devRun && dataArg ? { data: dataArg.slice('--data='.length) } : {}), ...(mica ? { mica: '1' } : {}) },
   });
   win.once('ready-to-show', () => {
     if (!startHidden && !shotArg) win.show();
