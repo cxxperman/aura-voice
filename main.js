@@ -798,6 +798,7 @@ function startHub() {
     app: 'aura',
     name: 'Aura',
     version: app.getVersion(),
+    port: Number(process.env.AURA_HUB_PORT) || undefined, // tests: a spare hub beside the real launcher
     topics: ['hub.theme'],
     commands: {
       'settings.set': (args) => askWindow('set', args),
