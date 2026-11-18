@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; media-src 'self' blob: mediastream:; img-src 'self' data:">
   <meta name="color-scheme" content="dark">
-  <title>Aura</title>
+  <title>aura.txt</title>
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="intro-on">
   <div class="intro" id="intro" aria-hidden="true">
     <div class="intro-fish" id="introFish"></div>
-    <div class="intro-name">Aura</div>
+    <div class="intro-name">aura<span>.txt</span></div>
   </div>
   <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
   <div class="drag" aria-hidden="true"></div>
@@ -63,7 +63,7 @@
         <div class="group guide" id="guide" hidden>
           <b>Три шага до хорошего звука</b>
           <ol>
-            <li><button type="button" id="guide1">Встройте Aura в микрофон</button> — тогда её услышат все программы</li>
+            <li><button type="button" id="guide1">Встройте aura.txt в микрофон</button> — тогда её услышат все программы</li>
             <li id="guide2">Включите сферу и нажмите «Автонастройка»</li>
             <li id="guide3">Выберите готовый звук и подправьте частоты</li>
           </ol>
@@ -109,7 +109,7 @@
         <p class="footnote" id="aiRights">Добавляйте только голоса, на которые у вас есть права: свой собственный, придуманного персонажа или голос человека, который дал согласие. Подделывать голос реального человека без его разрешения нельзя — за это отвечаете вы.</p>
         <div class="section-title"><span>Вживую</span></div>
         <div class="group toggles ai-live">
-          <label class="switch"><span><b>Говорить этим голосом в микрофон</b><small id="aiLiveText">Собеседники слышат выбранный голос вместо вашего, с опозданием около полсекунды. Перед нейросетью голос очищается настройками вкладки «Голос»: шумодав, гул, паузы, громкость. Нужна видеокарта; окно Aura должно оставаться открытым.</small></span><input type="checkbox" id="aiLive"><i></i></label>
+          <label class="switch"><span><b>Говорить этим голосом в микрофон</b><small id="aiLiveText">Собеседники слышат выбранный голос вместо вашего, с опозданием около полсекунды. Перед нейросетью голос очищается настройками вкладки «Голос»: шумодав, гул, паузы, громкость. Нужна видеокарта; окно aura.txt должно оставаться открытым.</small></span><input type="checkbox" id="aiLive"><i></i></label>
         </div>
         <div class="section-title"><span>Преобразовать запись</span><small>сначала очистка из вкладки «Голос», потом нейросеть — как вживую</small></div>
         <div class="group devices">
@@ -190,7 +190,7 @@
           <label class="field"><span>Профиль микрофона</span><select id="micProfile"></select></label>
           <label class="field"><span>Громкость на выходе</span><select id="loudTarget"><option value="0">Не выравнивать</option><option value="-18">−18 LUFS — звонки и Discord</option><option value="-16">−16 LUFS — подкаст</option><option value="-14">−14 LUFS — YouTube и стрим (плотнее, лимитер работает чаще)</option></select></label>
           <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Обычный — RNNoise, 10 мс (рекомендуется)</option><option value="1">Жёсткий — DeepFilterNet, 30 мс: давит шум сильнее, но меняет голос</option></select></label>
-          <label class="switch"><span><b>Запускать вместе с Windows</b><small>Aura открывается свёрнутой в трей, обработка голоса работает сразу</small></span><input type="checkbox" id="autostart"><i></i></label>
+          <label class="switch"><span><b>Запускать вместе с Windows</b><small>aura.txt открывается свёрнутой в трей, обработка голоса работает сразу</small></span><input type="checkbox" id="autostart"><i></i></label>
           <label class="switch"><span><b>Проверять обновления</b><small>При запуске спрашивает у GitHub, вышла ли новая версия. Устанавливается только по вашему нажатию</small></span><input type="checkbox" id="autoUpdate"><i></i></label>
           <div class="switch core-row" id="coreRow" hidden><span><b>core.txt — лаунчер dev.txt</b><small id="coreHint"></small></span><button type="button" class="pill small" id="coreBtn">Открыть core.txt</button></div>
           <label class="switch"><span><b>Убрать гул сети</b><small>Вырезает 50 Гц и его гармоники — гудение от розетки и плохой земли</small></span><input type="checkbox" id="dehum"><i></i></label>

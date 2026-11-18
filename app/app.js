@@ -304,14 +304,14 @@ function renderSystem() {
   let title, text, action;
   if (sys.outdated && !sys.detached) {
     title = 'Модуль в микрофоне нужно обновить';
-    text = 'Aura обновилась, а в микрофоне ещё работает прежний модуль. Windows спросит права администратора, звук прервётся на пару секунд.';
+    text = 'aura.txt обновилась, а в микрофоне ещё работает прежний модуль. Windows спросит права администратора, звук прервётся на пару секунд.';
     action = 'Обновить модуль';
   } else if (sys.detached) {
     title = 'Windows отключила модуль';
     text = 'Так бывает после обновления Windows или драйвера микрофона. Встройте модуль заново — настройки сохранятся.';
     action = 'Встроить заново';
   } else if (!sys.installed) {
-    title = 'Встроить Aura в микрофон';
+    title = 'Встроить aura.txt в микрофон';
     text = 'Обработанный голос услышат все программы — без виртуального кабеля. Windows спросит права администратора, звук в системе прервётся на пару секунд.';
     action = 'Встроить';
   } else if (silent) {
@@ -319,7 +319,7 @@ function renderSystem() {
     text = 'Пока модуль в таком состоянии, микрофон может не работать и в других программах. «Убрать» вернёт микрофон как был; после этого модуль можно встроить заново.';
     action = 'Убрать';
   } else {
-    title = 'Aura встроена в микрофон';
+    title = 'aura.txt встроена в микрофон';
     text = sys.alive ? 'Модуль работает. Голос остаётся обработанным, даже когда это окно закрыто.' : 'Включите сферу, чтобы проверить, что модуль работает.';
     action = 'Убрать';
   }
@@ -473,7 +473,7 @@ function hubSettingsNow() {
   return {
     groups: [
       { title: '', items: only([
-        { key: 'power', type: 'switch', label: 'Обработка голоса', hint: 'Включает и выключает Aura', value: engine.running },
+        { key: 'power', type: 'switch', label: 'Обработка голоса', hint: 'Включает и выключает aura.txt', value: engine.running },
         { key: 'preset', type: 'choice', label: 'Готовый звук', value: state.preset, options: Object.entries(PRESETS).map(([id, p]) => ({ value: id, label: p.name })) },
         sys.installed ? { key: 'mute', type: 'switch', label: 'Заглушить микрофон', hint: 'Тишина для всех программ', value: !!state.mute } : null,
         hubSwitch('auto'),
@@ -505,7 +505,7 @@ async function applyHubSetting(key, value) {
     return selectPreset(value);
   }
   if (key === 'mute') {
-    if (!sys.installed) throw new Error('Aura не встроена в микрофон');
+    if (!sys.installed) throw new Error('aura.txt не встроена в микрофон');
     $('#mute').checked = state.mute = !!value;
     save();
     pushSystem();
@@ -633,7 +633,7 @@ $('#presetSave').addEventListener('click', async () => {
 $('#presetLoad').addEventListener('click', async () => {
   const data = await window.auraSystem.importPreset();
   if (!data) return;
-  if (data.error) return flash('Это не файл пресета Aura', true);
+  if (data.error) return flash('Это не файл пресета aura.txt', true);
   // Only the sound travels in a file; room settings (noise, echo, gate) stay yours.
   const v = {};
   const eq = {};
@@ -898,7 +898,7 @@ function renderRoute() {
   const el = $('#route');
   if (sys.installed) {
     el.classList.remove('warn');
-    el.textContent = 'Aura встроена в микрофон: в Discord, OBS и играх ничего переключать не нужно, выбирайте свой обычный микрофон.';
+    el.textContent = 'aura.txt встроена в микрофон: в Discord, OBS и играх ничего переключать не нужно, выбирайте свой обычный микрофон.';
     return;
   }
   const out = devices.find((d) => d.kind === 'audiooutput' && d.deviceId === state.outputId);
@@ -2589,7 +2589,7 @@ async function renderAi() {
           row.append(pick, name, kind, del);
           return row;
         })
-      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Свои голоса: файл модели RVC второго поколения — .pth (как их обычно выкладывают; Aura сама переведёт его в нужный вид, не запуская ничего из файла) или .onnx. Файл .index не нужен.' })])
+      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Свои голоса: файл модели RVC второго поколения — .pth (как их обычно выкладывают; aura.txt сама переведёт его в нужный вид, не запуская ничего из файла) или .onnx. Файл .index не нужен.' })])
   );
   for (const id of ['aiTry', 'aiFile']) $('#' + id).disabled = aiBusy || !s.encoder || !state.aiVoice;
   $('#aiLive').disabled = (!s.encoder || !state.aiVoice) && !aiLiveOn;
@@ -3000,7 +3000,7 @@ boot();
     btn.classList.toggle('prominent', !here);
     hint.textContent = here
       ? 'Обновления, общие настройки и остальные приложения dev.txt — в одном окне'
-      : 'Все приложения dev.txt в одном окне: установка, обновления и общие настройки. Aura работает и без него';
+      : 'Все приложения dev.txt в одном окне: установка, обновления и общие настройки. aura.txt работает и без него';
     row.hidden = false;
   }
   btn.addEventListener('click', async () => { await sys.coreGo().catch(() => {}); setTimeout(paint, 1500); });

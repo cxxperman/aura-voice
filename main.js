@@ -43,7 +43,7 @@ function createWindow() {
     minHeight: 700,
     show: false,
     backgroundColor: '#09090d',
-    title: 'Aura',
+    title: 'aura.txt',
     icon: asset('icon.ico'),
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#00000000', symbolColor: '#ffffff', height: 30 },
@@ -84,7 +84,7 @@ function createWindow() {
     if (!fs.existsSync(flag)) {
       fs.writeFileSync(flag, '');
       tray?.displayBalloon({
-        title: 'Aura осталась в трее',
+        title: 'aura.txt осталась в трее',
         content: 'Голос продолжает обрабатываться. Чтобы закрыть совсем — правый клик по рыбке → «Выйти».',
         icon: asset('icon.png'),
       });
@@ -677,7 +677,7 @@ ipcMain.handle('autostart:set', (_e, on) => {
 });
 
 /* ───── Preset files ───── */
-const presetFilter = [{ name: 'Пресет Aura', extensions: ['json'] }];
+const presetFilter = [{ name: 'Пресет aura.txt', extensions: ['json'] }];
 ipcMain.handle('preset:export', async (_e, preset) => {
   if (!preset || typeof preset !== 'object' || typeof preset.v !== 'object') return false;
   const safeName = String(preset.name || 'preset').replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 40) || 'preset';
@@ -711,10 +711,10 @@ const command = (name, arg) => win?.webContents.send('tray:command', name, arg);
 function refreshTray() {
   if (!tray) return;
   tray.setImage(asset(ui.on && !ui.mute ? 'tray.png' : 'tray-off.png'));
-  tray.setToolTip(ui.mute ? 'Aura — микрофон заглушён' : ui.on ? `Aura — ${ui.presetName}` : 'Aura — выключено');
+  tray.setToolTip(ui.mute ? 'aura.txt — микрофон заглушён' : ui.on ? `Aura — ${ui.presetName}` : 'aura.txt — выключено');
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: 'Открыть Aura', click: showWindow },
+      { label: 'Открыть aura.txt', click: showWindow },
       { type: 'separator' },
       { label: 'Обработка голоса', type: 'checkbox', checked: ui.on, accelerator: hotkeys.power || undefined, registerAccelerator: false, click: () => command('power') },
       { label: 'Заглушить микрофон', type: 'checkbox', checked: ui.mute, enabled: ui.system, accelerator: hotkeys.mute || undefined, registerAccelerator: false, click: () => command('mute') },
@@ -786,9 +786,9 @@ const hubWaiting = new Map(); // request id → { resolve, reject, timer }
 // The settings live in the window, so a change is passed to it and answered from there.
 function askWindow(kind, args) {
   return new Promise((resolve, reject) => {
-    if (!win || win.isDestroyed()) return reject(new Error('окно Aura закрыто'));
+    if (!win || win.isDestroyed()) return reject(new Error('окно aura.txt закрыто'));
     const id = ++hubSeq;
-    const timer = setTimeout(() => { hubWaiting.delete(id); reject(new Error('Aura не ответила')); }, 4000);
+    const timer = setTimeout(() => { hubWaiting.delete(id); reject(new Error('aura.txt не ответила')); }, 4000);
     hubWaiting.set(id, { resolve, reject, timer });
     win.webContents.send('hub:command', id, kind, String(args?.key || ''), args?.value);
   });
@@ -796,7 +796,7 @@ function askWindow(kind, args) {
 function startHub() {
   hub = hubConnect({
     app: 'aura',
-    name: 'Aura',
+    name: 'aura.txt',
     version: app.getVersion(),
     port: Number(process.env.AURA_HUB_PORT) || undefined, // tests: a spare hub beside the real launcher
     topics: ['hub.theme'],

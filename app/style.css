@@ -582,3 +582,6 @@ kbd.failed { background: var(--red); color: #fff; }
   .bar, .bar i, .switch i, .switch i::after, .voice-icon, .pad::before { forced-color-adjust: none; }
   .tabs button[aria-selected='true'], .segmented button[aria-checked='true'], .voice[aria-checked='true'] { outline: 2px solid Highlight; outline-offset: -2px; }
 }
+
+/* имя продукта: подпись .txt приглушена, как во всех приложениях dev.txt */
+.intro-name span { color: var(--label-2); }
