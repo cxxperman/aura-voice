@@ -716,7 +716,7 @@ const command = (name, arg) => win?.webContents.send('tray:command', name, arg);
 function refreshTray() {
   if (!tray) return;
   tray.setImage(asset(ui.on && !ui.mute ? 'tray.png' : 'tray-off.png'));
-  tray.setToolTip(ui.mute ? 'aura.txt — микрофон заглушён' : ui.on ? `Aura — ${ui.presetName}` : 'aura.txt — выключено');
+  tray.setToolTip(ui.mute ? 'aura.txt — микрофон заглушён' : ui.on ? `aura.txt — ${ui.presetName}` : 'aura.txt — выключено');
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Открыть aura.txt', click: showWindow },
@@ -734,6 +734,8 @@ function refreshTray() {
         submenu: ui.voices.map((v) => ({ label: v.name, type: 'radio', checked: v.id === ui.voice, click: () => command('voice', v.id === ui.voice ? 'none' : v.id) })),
       },
       { type: 'separator' },
+      // the same line every dev.txt app has in its tray menu: open the launcher, or fetch it
+      { label: hub?.online || coreInstalled() ? 'Открыть core.txt' : 'Скачать core.txt', click: () => coreGo() },
       {
         label: 'Запускать вместе с Windows',
         type: 'checkbox',
@@ -743,7 +745,7 @@ function refreshTray() {
       },
       { type: 'separator' },
       {
-        label: 'Выйти',
+        label: 'Выход',
         click: () => {
           quitting = true;
           app.quit();
@@ -835,11 +837,12 @@ const CORE_URL = 'https://github.com/cxxperman/core.txt/releases/latest/download
 const corePath = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'dev.txt', 'Core.exe');
 const coreInstalled = () => { try { return fs.existsSync(corePath); } catch { return false; } };
 ipcMain.handle('core:info', () => ({ online: !!hub?.online, installed: coreInstalled() }));
-ipcMain.handle('core:go', async () => {
+async function coreGo() {
   if (hub?.online) { await hub.command('core', 'show', null); return; }
   if (coreInstalled()) { const { spawn } = require('child_process'); spawn(corePath, [], { detached: true, stdio: 'ignore' }).unref(); return; }
   await shell.openExternal(CORE_URL);
-});
+}
+ipcMain.handle('core:go', () => coreGo());
 
 /* ───── System module (APO) ───── */
 const dataDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'Aura');
