@@ -1,7 +1,7 @@
 {
   "name": "aura-voice",
   "productName": "Aura",
-  "version": "0.27.0",
+  "version": "0.28.0",
   "description": "Студийная обработка голоса с микрофона в реальном времени",
   "main": "main.js",
   "scripts": {
@@ -34,7 +34,9 @@
       "node_modules/onnxruntime-common/**",
       "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
       "!node_modules/onnxruntime-node/bin/napi-v6/linux/**",
-      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
+      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**",
+      "party-net.js",
+      "!node_modules/**/prebuilds/{android*,darwin*,ios*,linux*,win32-arm64,win32-ia32}/**"
     ],
     "extraResources": [
       {
@@ -68,10 +70,13 @@
       "artifactName": "Aura-Setup-${version}.exe"
     },
     "asarUnpack": [
-      "node_modules/onnxruntime-node/**"
+      "node_modules/onnxruntime-node/**",
+      "node_modules/sodium-native/**",
+      "node_modules/udx-native/**"
     ]
   },
   "dependencies": {
+    "hyperswarm": "^4.17.2",
     "onnxruntime-node": "^1.31.1"
   }
 }

@@ -736,6 +736,41 @@ ipcMain.handle('party:forget', async () => { // everything the party window's pr
   await partySession().clearCache();
   return true;
 });
+// Friends: found by a code, let in by hand (party-net.js). The window is told what happens and
+// carries the WebRTC side itself.
+const { PartyNet, normalizeCode } = require('./party-net.js');
+let partyNet = null;
+const partyTell = (name, payload) => win && !win.isDestroyed() && win.webContents.send('party:event', name, payload);
+function partyNetwork() {
+  if (partyNet) return partyNet;
+  partyNet = new PartyNet(require('hyperswarm'));
+  for (const name of ['request', 'member', 'left', 'signal', 'waiting', 'joined', 'denied', 'ended']) partyNet.on(name, (payload) => partyTell(name, payload));
+  return partyNet;
+}
+ipcMain.handle('party:host', async () => {
+  try {
+    return { code: await partyNetwork().host() };
+  } catch {
+    return { error: 'Не получилось создать пати. Проверьте интернет.' };
+  }
+});
+ipcMain.handle('party:join', async (_e, code, name) => {
+  if (!normalizeCode(code)) return { error: 'В коде восемь букв и цифр, например ABCD-2345.' };
+  try {
+    await partyNetwork().join(code, name);
+    return { ok: true };
+  } catch {
+    return { error: 'Не получилось подключиться. Проверьте интернет.' };
+  }
+});
+ipcMain.handle('party:answer', (_e, id, ok) => !!partyNet?.answer(String(id), !!ok));
+ipcMain.handle('party:kick', (_e, id) => void partyNet?.kick(String(id)));
+ipcMain.on('party:signal', (_e, id, msg) => partyNet?.signal(String(id), msg));
+ipcMain.handle('party:leave', async () => {
+  await partyNet?.leave();
+  return true;
+});
+
 // Sound for the microphone (friends' voices, mixed, mono 48 kHz float32).
 const partyWrite = (samples) => {
   try {

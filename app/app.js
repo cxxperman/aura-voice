@@ -111,6 +111,7 @@ const DEFAULTS = {
   autoUpdate: true, // ask GitHub for a newer release at start
   party: false, // the party section, off until switched on in Settings
   partyUrl: '',
+  partyName: '',
   aiVoice: '', // the chosen AI voice (id of an imported model)
   aiPitch: 0, // semitones for AI conversion
   aiSpeaker: 50, // which of the open model's timbres
@@ -2588,6 +2589,7 @@ let partyTime = null;
 function stopPartyCapture() {
   partyStream?.getTracks().forEach((t) => t.stop());
   partyStream = partyAnalyser = null;
+  partyRtc?.setSource(null);
   $('#partyLevel').style.transform = 'scaleX(0)';
 }
 // The sound of the party window, and of nothing else (main.js decides what is handed over).
@@ -2598,6 +2600,7 @@ async function startPartyCapture() {
     stream.getVideoTracks().forEach((t) => t.stop()); // only the sound is wanted
     if (!stream.getAudioTracks().length) throw new Error('no audio');
     partyStream = stream;
+    partyRtc?.setSource(stream);
     const ctx = engine.ctx || new AudioContext({ sampleRate: 48000 });
     partyAnalyser = ctx.createAnalyser();
     partyAnalyser.fftSize = 2048;
@@ -2646,6 +2649,133 @@ setInterval(() => {
   const db = 10 * Math.log10(sum / partyTime.length + 1e-12);
   $('#partyLevel').style.transform = `scaleX(${clamp((db + 60) / 54, 0, 1).toFixed(3)})`;
 }, 80);
+/* Friends: a code, a request to come in, then sound both ways (party-rtc.js). */
+let partyRtc = null;
+let partyRole = null; // 'host' | 'guest'
+let partyCodeNow = '';
+const partyPeople = new Map(); // id → { name, state: 'asking' | 'in' | 'on' }
+const partyVoice = new Audio(); // guest: what the host passes on
+function renderPeople() {
+  const box = $('#partyMembers');
+  box.replaceChildren(
+    ...[...partyPeople].map(([id, p]) => {
+      const row = document.createElement('div');
+      row.className = 'party-member';
+      const name = document.createElement('span');
+      name.textContent = p.name;
+      const note = document.createElement('small');
+      note.textContent = p.state === 'asking' ? 'хочет войти' : p.state === 'on' ? 'на связи' : 'соединяется…';
+      name.append(note);
+      const actions = document.createElement('span');
+      actions.className = 'party-actions';
+      const button = (label, cls, fn) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = cls;
+        b.textContent = label;
+        b.addEventListener('click', fn);
+        actions.append(b);
+      };
+      if (p.state === 'asking') {
+        button('Отказать', 'pill small', () => { window.auraSystem.partyAnswer(id, false); partyPeople.delete(id); renderPeople(); });
+        button('Впустить', 'pill small prominent', () => window.auraSystem.partyAnswer(id, true));
+      } else {
+        button('Убрать', 'pill small', () => window.auraSystem.partyKick(id));
+      }
+      row.append(name, actions);
+      return row;
+    })
+  );
+}
+function renderPartyNet(status = '') {
+  $('#partyIdle').hidden = !!partyRole;
+  $('#partyLive').hidden = !partyRole;
+  $('#partyCopy').hidden = partyRole !== 'host';
+  if (status) $('#partyStatus').textContent = status;
+  else if (partyRole === 'host') $('#partyStatus').innerHTML = `Пати открыта. Код: <b>${partyCodeNow}</b>`; // the code is this app's own, from a fixed alphabet
+  renderPeople();
+}
+async function partyStop(note = '') {
+  await window.auraSystem.partyLeave();
+  await partyRtc?.destroy();
+  partyRtc = null;
+  partyRole = null;
+  partyPeople.clear();
+  partyVoice.srcObject = null;
+  renderPartyNet();
+  if (note) partyNote(note);
+}
+const newPartyRtc = () =>
+  new PartyRtc({
+    signal: (id, msg) => window.auraSystem.partySignal(id, msg),
+    onMix: (buffer) => window.auraSystem.partyMix(buffer),
+    onVoice: (stream) => {
+      partyVoice.srcObject = stream;
+      partyVoice.setSinkId(state.monitorId || '').catch(() => {});
+      partyVoice.play().catch(() => {});
+    },
+    onPeer: (id, s) => {
+      const p = partyPeople.get(id);
+      if (p && s === 'connected') { p.state = 'on'; renderPeople(); }
+      if (partyRole === 'guest' && s === 'connected') renderPartyNet('Вы в пати. Слышите то, что звучит у хоста; ваш микрофон идёт собеседнику.');
+      if (s === 'failed') partyNote('Прямое соединение не пробилось через сеть одного из участников.', true);
+    },
+  });
+$('#partyName').value = state.partyName || '';
+$('#partyName').addEventListener('change', (e) => { state.partyName = e.target.value.trim().slice(0, 24); save(); });
+$('#partyCreate').addEventListener('click', async () => {
+  if (!sys.installed) return partyNote('Голоса друзей попадают в микрофон через модуль: встройте его в Настройках.', true);
+  partyNote('Создаю пати…');
+  const res = await window.auraSystem.partyHost();
+  if (res.error) return partyNote(res.error, true);
+  partyRole = 'host';
+  partyCodeNow = res.code;
+  partyRtc = newPartyRtc();
+  partyRtc.setSource(partyStream);
+  partyNote(partyStream ? '' : 'Откройте окно пати выше — друзья будут слышать его звук.');
+  renderPartyNet();
+});
+$('#partyCopy').addEventListener('click', () => navigator.clipboard.writeText(partyCodeNow).then(() => flash('Код скопирован')));
+$('#partyJoin').addEventListener('click', async () => {
+  const name = $('#partyName').value.trim() || 'Гость';
+  let mic = null;
+  try { // echo cancelling on: what you hear from the party must not go back into it through your microphone
+    mic = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: state.inputId ? { exact: state.inputId } : undefined, echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+  } catch {
+    return partyNote('Не получилось открыть микрофон.', true);
+  }
+  partyNote('Ищу пати…');
+  partyRtc = newPartyRtc();
+  await partyRtc.asGuest(mic);
+  partyRole = 'guest';
+  const res = await window.auraSystem.partyJoin($('#partyCode').value, name);
+  if (res.error) {
+    mic.getTracks().forEach((t) => t.stop());
+    await partyStop();
+    return partyNote(res.error, true);
+  }
+  partyRtc.micStream = mic;
+  renderPartyNet('Ищу пати по коду…');
+  setTimeout(() => partyRole === 'guest' && $('#partyStatus').textContent.startsWith('Ищу') && renderPartyNet('Пати с таким кодом пока не нашлась. Проверьте код; хост должен держать раздел открытым.'), 15000);
+});
+$('#partyCode').addEventListener('keydown', (e) => e.key === 'Enter' && $('#partyJoin').click());
+$('#partyLeave').addEventListener('click', () => {
+  partyRtc?.micStream?.getTracks().forEach((t) => t.stop());
+  partyStop();
+  partyNote('');
+});
+window.auraSystem?.onParty?.((name, p) => {
+  if (name === 'request') { partyPeople.set(p.id, { name: p.name, state: 'asking' }); renderPeople(); flash(`${p.name} хочет войти в пати`); if (windowVisible) showTab('party'); }
+  if (name === 'member') { partyPeople.set(p.id, { name: p.name, state: 'in' }); renderPeople(); partyRtc?.addGuest(p.id); }
+  if (name === 'left') { partyPeople.delete(p.id); partyRtc?.close(p.id); renderPeople(); }
+  if (name === 'signal') partyRtc?.onSignal(p.id, p.msg);
+  if (name === 'waiting') renderPartyNet('Нашёл пати. Жду, пока хост впустит…');
+  if (name === 'joined') renderPartyNet('Вас впустили, соединяюсь…');
+  if (name === 'denied') { partyRtc?.micStream?.getTracks().forEach((t) => t.stop()); partyStop('Хост не впустил.'); }
+  if (name === 'ended' && partyRole === 'guest') { partyRtc?.micStream?.getTracks().forEach((t) => t.stop()); partyStop('Пати закрыта.'); }
+});
+renderPartyNet();
+
 function applyPartySwitch() {
   partyTab.hidden = !state.party;
   $('#partyOn').checked = !!state.party;
@@ -2654,7 +2784,7 @@ function applyPartySwitch() {
 $('#partyOn').addEventListener('change', async (e) => {
   state.party = e.target.checked;
   save();
-  if (!state.party) { stopPartyCapture(); await window.auraSystem.partyClose(); }
+  if (!state.party) { stopPartyCapture(); await window.auraSystem.partyClose(); if (partyRole) await partyStop(); }
   applyPartySwitch();
   pushSystem();
 });
