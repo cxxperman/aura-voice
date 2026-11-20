@@ -771,6 +771,52 @@ ipcMain.handle('party:leave', async () => {
   return true;
 });
 
+// The sound of a program instead of a site: native/capture.cpp, one process (and its children) at a time.
+const captureTool = () => path.join(app.isPackaged ? path.join(process.resourcesPath, 'native') : path.join(__dirname, 'native', 'bin'), 'AuraCapture.exe');
+let partyCapture = null;
+function stopPartyCapture() {
+  const child = partyCapture;
+  partyCapture = null;
+  child?.kill();
+}
+// Programs with a window, by name: what a person would recognise as "an application".
+ipcMain.handle('party:apps', () =>
+  new Promise((resolve) => {
+    if (!fs.existsSync(captureTool())) return resolve(null); // the tool is not there (older install)
+    const script = "Get-Process | Where-Object { $_.MainWindowTitle -and $_.Id -ne $PID } | Select-Object Id,ProcessName,MainWindowTitle | ConvertTo-Json -Compress";
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + script], { windowsHide: true, encoding: 'utf8', timeout: 8000 }, (err, out) => {
+      try {
+        const list = JSON.parse(out || '[]');
+        const own = new Set([process.pid, ...app.getAppMetrics().map((m) => m.pid)]);
+        resolve((Array.isArray(list) ? list : [list]).filter((p) => p && Number.isInteger(p.Id) && !own.has(p.Id)).map((p) => ({ pid: p.Id, name: String(p.ProcessName).slice(0, 40), title: String(p.MainWindowTitle).slice(0, 60) })));
+      } catch {
+        resolve(err ? [] : []);
+      }
+    });
+  })
+);
+ipcMain.handle('party:capture', (_e, pid) => {
+  stopPartyCapture();
+  if (!Number.isInteger(pid) || pid <= 0 || !fs.existsSync(captureTool())) return false;
+  const child = spawn(captureTool(), [String(pid)], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  partyCapture = child;
+  let rest = Buffer.alloc(0);
+  child.stdout.on('data', (chunk) => {
+    const all = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+    const whole = all.length - (all.length % 4);
+    rest = all.subarray(whole);
+    if (whole && win && !win.isDestroyed()) win.webContents.send('party:pcm', all.buffer.slice(all.byteOffset, all.byteOffset + whole));
+  });
+  child.on('exit', () => {
+    if (partyCapture === child) { partyCapture = null; partyTell('capture-ended', {}); }
+  });
+  return true;
+});
+ipcMain.handle('party:capture-stop', () => {
+  stopPartyCapture();
+  return true;
+});
+
 // Sound for the microphone (friends' voices, mixed, mono 48 kHz float32).
 const partyWrite = (samples) => {
   try {

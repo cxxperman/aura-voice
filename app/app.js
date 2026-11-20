@@ -2587,7 +2587,7 @@ let partyStream = null;
 let partyAnalyser = null;
 let partyTime = null;
 function stopPartyCapture() {
-  partyStream?.getTracks().forEach((t) => t.stop());
+  if (partyStream && partyStream !== partyFeed?.stream) partyStream.getTracks().forEach((t) => t.stop());
   partyStream = partyAnalyser = null;
   partyRtc?.setSource(null);
   $('#partyLevel').style.transform = 'scaleX(0)';
@@ -2610,11 +2610,73 @@ async function startPartyCapture() {
     partyNote('Не получилось взять звук окна.', true);
   }
 }
+/* A program as the source: its sound arrives as raw samples (native/capture.cpp) and is turned
+ * into a stream here, so everything downstream — the meter, the friends — treats it like the window's. */
+const PARTY_FEED = `
+class PartyFeed extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(48000); this.w = 0; this.r = 0; this.port.onmessage = (e) => { const x = new Float32Array(e.data); for (let i = 0; i < x.length; i++) { this.buf[this.w] = x[i]; this.w = (this.w + 1) % 48000; } }; }
+  process(_in, outputs) {
+    const out = outputs[0][0];
+    let waiting = (this.w - this.r + 48000) % 48000;
+    if (waiting > 14400) { this.r = (this.w - 2880 + 48000) % 48000; waiting = 2880; } // more than 0.3 s behind: skip to the newest
+    for (let i = 0; i < out.length; i++) { if (waiting > 0) { out[i] = this.buf[this.r]; this.r = (this.r + 1) % 48000; waiting--; } else out[i] = 0; }
+    return true;
+  }
+}
+registerProcessor('party-feed', PartyFeed);
+`;
+let partyFeed = null; // { ctx, node, stream }
+let partyAppPid = 0;
+async function startAppCapture(pid) {
+  stopPartyCapture();
+  if (!partyFeed) {
+    const ctx = new AudioContext({ sampleRate: 48000 });
+    const url = URL.createObjectURL(new Blob([PARTY_FEED], { type: 'application/javascript' }));
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    const node = new AudioWorkletNode(ctx, 'party-feed', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+    const dest = ctx.createMediaStreamDestination();
+    node.connect(dest);
+    partyFeed = { ctx, node, stream: dest.stream };
+  }
+  if (!(await window.auraSystem.partyCapture(pid))) return partyNote('Не получилось начать захват этой программы.', true);
+  await partyFeed.ctx.resume();
+  partyAppPid = pid;
+  partyStream = partyFeed.stream;
+  partyRtc?.setSource(partyStream);
+  partyAnalyser = partyFeed.ctx.createAnalyser();
+  partyAnalyser.fftSize = 2048;
+  partyTime = new Float32Array(2048);
+  partyFeed.node.connect(partyAnalyser);
+  partyNote('Друзья будут слышать звук выбранной программы. Вы сами слышите её как обычно.');
+}
+window.auraSystem?.onPartyPcm?.((pcm) => partyAppPid && partyFeed?.node.port.postMessage(pcm, [pcm]));
+async function listPartyApps() {
+  const select = $('#partyApp');
+  const apps = await window.auraSystem.partyApps();
+  if (apps === null) { select.disabled = true; select.options[0].textContent = 'Захват программ появится после обновления модуля'; return; }
+  const keep = String(partyAppPid || '');
+  select.replaceChildren(new Option('Не выбрана — источник: окно пати', ''), ...apps.map((a) => new Option(`${a.name} — ${a.title}`, String(a.pid))));
+  select.value = [...select.options].some((o) => o.value === keep) ? keep : '';
+}
+$('#partyApp').addEventListener('pointerdown', listPartyApps);
+$('#partyApp').addEventListener('focus', listPartyApps);
+$('#partyApp').addEventListener('change', async (e) => {
+  const pid = Number(e.target.value) || 0;
+  if (pid) return startAppCapture(pid);
+  partyAppPid = 0;
+  await window.auraSystem.partyCaptureStop();
+  stopPartyCapture();
+  partyNote('');
+  renderParty();
+});
+
 async function renderParty() {
   const s = await window.auraSystem.partyState();
   $('#partyTitle').textContent = s.open ? s.title || s.url : 'Окно закрыто';
   $('#partyClose').hidden = !s.open;
   $('#partyOpen').textContent = s.open ? 'Перейти' : 'Открыть';
+  if (partyAppPid) return; // a program is the source: the window's sound is not taken
   if (!s.open && partyStream) stopPartyCapture();
   if (s.open && !partyStream) startPartyCapture();
 }
@@ -2772,6 +2834,7 @@ window.auraSystem?.onParty?.((name, p) => {
   if (name === 'waiting') renderPartyNet('Нашёл пати. Жду, пока хост впустит…');
   if (name === 'joined') renderPartyNet('Вас впустили, соединяюсь…');
   if (name === 'denied') { partyRtc?.micStream?.getTracks().forEach((t) => t.stop()); partyStop('Хост не впустил.'); }
+  if (name === 'capture-ended' && partyAppPid) { partyAppPid = 0; $('#partyApp').value = ''; stopPartyCapture(); partyNote('Программа закрылась — захват остановлен.'); renderParty(); }
   if (name === 'ended' && partyRole === 'guest') { partyRtc?.micStream?.getTracks().forEach((t) => t.stop()); partyStop('Пати закрыта.'); }
 });
 renderPartyNet();
@@ -2784,7 +2847,7 @@ function applyPartySwitch() {
 $('#partyOn').addEventListener('change', async (e) => {
   state.party = e.target.checked;
   save();
-  if (!state.party) { stopPartyCapture(); await window.auraSystem.partyClose(); if (partyRole) await partyStop(); }
+  if (!state.party) { partyAppPid = 0; await window.auraSystem.partyCaptureStop(); stopPartyCapture(); await window.auraSystem.partyClose(); if (partyRole) await partyStop(); }
   applyPartySwitch();
   pushSystem();
 });

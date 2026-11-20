@@ -37,6 +37,10 @@ target_link_options(AuraSetup PRIVATE "/MANIFESTUAC:level='requireAdministrator'
 add_executable(dsp_test dsp_test.cpp)
 target_link_libraries(dsp_test PRIVATE rnnoise)
 
+# The sound of one program (process loopback), for the party section.
+add_executable(AuraCapture capture.cpp)
+target_link_libraries(AuraCapture PRIVATE ole32 mmdevapi)
+
 # Runs a recording through the same chain as the module (used by the window's «Записи» page).
 add_executable(AuraRender render.cpp)
 target_link_libraries(AuraRender PRIVATE rnnoise)
