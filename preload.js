@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('auraSystem', {
   partyAnswer: (id, ok) => ipcRenderer.invoke('party:answer', id, ok),
   partyKick: (id) => ipcRenderer.invoke('party:kick', id),
   partySignal: (id, msg) => ipcRenderer.send('party:signal', id, msg),
+  partyAudio: (id, d) => ipcRenderer.send('party:audio', id, d),
+  partyCheck: () => ipcRenderer.invoke('party:check'),
   partyLeave: () => ipcRenderer.invoke('party:leave'),
   onParty: (fn) => ipcRenderer.on('party:event', (_e, name, payload) => fn(name, payload)),
   getAutostart: () => ipcRenderer.invoke('autostart:get'),

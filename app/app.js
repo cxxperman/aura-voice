@@ -2903,17 +2903,18 @@ async function partyStop(note = '') {
 const newPartyRtc = () =>
   new PartyRtc({
     signal: (id, msg) => window.auraSystem.partySignal(id, msg),
+    sendAudio: (id, d) => window.auraSystem.partyAudio(id, d),
     onMix: (buffer) => window.auraSystem.partyMix(buffer),
     onVoice: (stream) => {
       partyVoice.srcObject = stream;
       partyVoice.setSinkId(state.monitorId || '').catch(() => {});
       partyVoice.play().catch(() => {});
     },
-    onPeer: (id, s) => {
+    onPeer: (id, s, piped) => {
       const p = partyPeople.get(id);
       if (p && s === 'connected') { p.state = 'on'; renderPeople(); }
       if (partyRole === 'guest' && s === 'connected') renderPartyNet('Вы в пати. Слышите то, что звучит у хоста; ваш микрофон идёт собеседнику.');
-      if (s === 'failed') partyNote('Прямое соединение не пробилось через сеть одного из участников.', true);
+      if (s === 'connected' && piped) partyNote('Обычный звуковой канал не пробился через сеть — звук идёт по запасному. Задержка может быть чуть больше.');
     },
   });
 $('#partyName').value = state.partyName || '';
@@ -2951,7 +2952,26 @@ $('#partyJoin').addEventListener('click', async () => {
   }
   partyRtc.micStream = mic;
   renderPartyNet('Ищу пати по коду…');
-  setTimeout(() => partyRole === 'guest' && $('#partyStatus').textContent.startsWith('Ищу') && renderPartyNet('Пати с таким кодом пока не нашлась. Проверьте код; хост должен держать раздел открытым.'), 15000);
+  setTimeout(async () => {
+    if (partyRole !== 'guest' || !$('#partyStatus').textContent.startsWith('Ищу')) return;
+    renderPartyNet('Пати с таким кодом пока не нашлась. Проверьте код; хост должен держать раздел открытым. Проверяю вашу сеть…');
+    const verdict = partyVerdict(await window.auraSystem.partyCheck());
+    if (partyRole === 'guest' && $('#partyStatus').textContent.startsWith('Пати с таким')) { renderPartyNet('Пати с таким кодом пока не нашлась — поиск продолжается.'); partyNote(verdict.text, !verdict.ok); }
+  }, 15000);
+});
+// The network, in words a person can act on (and read out to the friend on the other end).
+function partyVerdict(c) {
+  if (!c.directory) return { ok: false, text: 'Проверка связи: эта сеть не пускает к общему справочнику, где ищутся пати по коду. Отсюда пати не найти и не создать. Обычно так делает провайдер или фильтр; помогает другая сеть или VPN.' };
+  if (c.symmetric) return { ok: false, text: 'Проверка связи: справочник доступен, но роутер или провайдер выдаёт новый порт на каждое соединение (так бывает у мобильного интернета и части провайдеров). Соединиться получится только с тем, у кого сеть обычная; двое с такой сетью друг до друга не достучатся.' };
+  if (!c.stun) return { ok: true, text: 'Проверка связи: справочник доступен, сеть обычная. Служебные серверы звукового канала не отвечают — звук пойдёт по запасному каналу.' };
+  return { ok: true, text: `Проверка связи: всё в порядке — справочник доступен (${(c.ms / 1000).toFixed(1)} с), сеть обычная, серверы звукового канала отвечают (${c.stun} из ${c.stunAll}).` };
+}
+$('#partyCheck').addEventListener('click', async (e) => {
+  e.target.disabled = true;
+  partyNote('Проверяю связь, до 15 секунд…');
+  const verdict = partyVerdict(await window.auraSystem.partyCheck());
+  partyNote(verdict.text, !verdict.ok);
+  e.target.disabled = false;
 });
 $('#partyCode').addEventListener('keydown', (e) => e.key === 'Enter' && $('#partyJoin').click());
 $('#partyLeave').addEventListener('click', () => {
@@ -2964,6 +2984,7 @@ window.auraSystem?.onParty?.((name, p) => {
   if (name === 'member') { partyPeople.set(p.id, { name: p.name, state: 'in' }); renderPeople(); partyRtc?.addGuest(p.id); }
   if (name === 'left') { partyPeople.delete(p.id); partyRtc?.close(p.id); renderPeople(); }
   if (name === 'signal') partyRtc?.onSignal(p.id, p.msg);
+  if (name === 'audio') partyRtc?.onAudio(p.id, p.d);
   if (name === 'waiting') renderPartyNet('Нашёл пати. Жду, пока хост впустит…');
   if (name === 'joined') renderPartyNet('Вас впустили, соединяюсь…');
   if (name === 'denied') { partyRtc?.micStream?.getTracks().forEach((t) => t.stop()); partyStop('Хост не впустил.'); }

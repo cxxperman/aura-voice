@@ -10,6 +10,8 @@
 //   guest → host   hello { name }                      (once, first)
 //   host → guest   welcome | denied                    (after the host's own decision)
 //   both ways      offer / answer { sdp }, ice { c }   (only once welcomed)
+//   both ways      a { d }                             (only once welcomed: 20 ms of Opus, base64 — the
+//                                                      sound itself, when WebRTC could not get through)
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
@@ -115,6 +117,11 @@ class PartyNet extends EventEmitter {
       this.emit('signal', { id: peer.id, msg: { t: msg.t, sdp: msg.sdp } });
       return true;
     };
+    if (msg.t === 'a') {
+      if (peer.state !== 'in' || typeof msg.d !== 'string' || msg.d.length > 2048) return false;
+      this.emit('audio', { id: peer.id, d: msg.d });
+      return true;
+    }
     if (this.role === 'host') {
       if (msg.t === 'hello' && peer.state === 'new') {
         peer.name = cleanName(msg.name);
@@ -165,6 +172,11 @@ class PartyNet extends EventEmitter {
     if (!peer || peer.state !== 'in' || !msg || !['offer', 'answer', 'ice'].includes(msg.t)) return false;
     this.send(peer, msg.t === 'ice' ? { t: 'ice', c: msg.c } : { t: msg.t, sdp: String(msg.sdp || '') });
     return true;
+  }
+
+  audio(id, d) {
+    const peer = this.peers.get(id);
+    if (peer && peer.state === 'in' && typeof d === 'string' && d.length <= 2048) this.send(peer, { t: 'a', d });
   }
 
   kick(id) {

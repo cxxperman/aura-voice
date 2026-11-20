@@ -8,7 +8,14 @@
  * The host adds up the guests' voices, holds them under a ceiling, and hands them out in 20 ms
  * pieces (`onMix`) for the module to add to the microphone. Friends hear each other elsewhere
  * (Discord, or the room): here they share one conversation with a third person.
+ *
+ * Some networks let the small messages through and stop WebRTC itself (its servers are blocked,
+ * or its packets are recognised and dropped). Then the sound takes the pipe the messages already
+ * use: 20 ms pieces of Opus, each way. Slower to recover from a lost packet, but it gets through
+ * wherever the code did.
  */
+const PARTY_STUN = ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478', 'stun:stun.nextcloud.com:3478', 'stun:stun.sipnet.ru:3478']; // the same list as main.js
+const PIPE_AFTER = 10000; // ms without a WebRTC connection before the sound goes by the pipe
 const PARTY_TAP = `
 class PartyTap extends AudioWorkletProcessor {
   constructor() { super(); this.buf = new Float32Array(960); this.n = 0; }
@@ -23,13 +30,33 @@ class PartyTap extends AudioWorkletProcessor {
   }
 }
 registerProcessor('party-tap', PartyTap);
+// Sound that arrived by the pipe: plays what it has, waits for 60 ms before starting (pieces come
+// unevenly), and skips ahead if it ever falls 0.3 s behind.
+class PartyIn extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(48000); this.w = 0; this.r = 0; this.playing = false; this.port.onmessage = (e) => { const x = new Float32Array(e.data); for (let i = 0; i < x.length; i++) { this.buf[this.w] = x[i]; this.w = (this.w + 1) % 48000; } }; }
+  process(_in, outputs) {
+    const out = outputs[0][0];
+    let waiting = (this.w - this.r + 48000) % 48000;
+    if (!this.playing && waiting >= 2880) this.playing = true;
+    if (waiting > 14400) { this.r = (this.w - 2880 + 48000) % 48000; waiting = 2880; }
+    if (this.playing && waiting < out.length) this.playing = false; // ran dry: gather again
+    if (!this.playing) return true;
+    for (let i = 0; i < out.length; i++) { out[i] = this.buf[this.r]; this.r = (this.r + 1) % 48000; }
+    return true;
+  }
+}
+registerProcessor('party-in', PartyIn);
 `;
 
 class PartyRtc {
   // signal(id, msg): send to that peer · onMix(ArrayBuffer): 960 mono float32 samples of guests' voices
   // onVoice(stream): guest side, the host's sound to play · onPeer(id, state): 'connected' | 'failed' | 'closed'
-  constructor({ signal, onMix = () => {}, onVoice = () => {}, onPeer = () => {} }) {
+  // sendAudio(id, base64): a piece of sound for that peer by the pipe · forcePipe: tests only
+  constructor({ signal, sendAudio = () => {}, onMix = () => {}, onVoice = () => {}, onPeer = () => {}, forcePipe = false }) {
     this.signal = signal;
+    this.sendAudio = sendAudio;
+    this.forcePipe = forcePipe;
+    this.sent = 0;
     this.onVoice = onVoice;
     this.onPeer = onPeer;
     this.peers = new Map();
@@ -45,6 +72,7 @@ class PartyRtc {
     this.pre.gain.value = 0.5;
     this.bus.connect(this.pre).connect(this.ceiling);
     this.source = null;
+    this.sendBus = this.ctx.createGain(); // what this side sends, for the pipe's encoder
     this.sinks = new Map(); // keep-alive <audio> elements for remote streams
     const url = URL.createObjectURL(new Blob([PARTY_TAP], { type: 'application/javascript' }));
     this.ready = this.ctx.audioWorklet.addModule(url).then(() => {
@@ -52,11 +80,14 @@ class PartyRtc {
       const tap = new AudioWorkletNode(this.ctx, 'party-tap', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: 'explicit' });
       this.ceiling.connect(tap);
       tap.port.onmessage = (e) => this.connected() && onMix(e.data); // silence is not worth sending when nobody is here
+      const sendTap = new AudioWorkletNode(this.ctx, 'party-tap', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: 'explicit' });
+      this.sendBus.connect(sendTap);
+      sendTap.port.onmessage = (e) => this.encode(e.data);
     });
   }
 
   connected() {
-    for (const p of this.peers.values()) if (p.pc.connectionState === 'connected') return true;
+    for (const p of this.peers.values()) if (p.piped || p.pc.connectionState === 'connected') return true;
     return false;
   }
 
@@ -65,16 +96,18 @@ class PartyRtc {
     this.source?.disconnect();
     this.source = stream ? this.ctx.createMediaStreamSource(stream) : null;
     this.source?.connect(this.out);
+    this.source?.connect(this.sendBus);
   }
 
   peer(id) {
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-    const entry = { pc, queue: [], described: false };
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: PARTY_STUN }] });
+    const entry = { pc, queue: [], described: false, piped: false };
+    entry.timer = setTimeout(() => (this.forcePipe || pc.connectionState !== 'connected') && this.pipe(id), this.forcePipe ? 1500 : PIPE_AFTER);
     this.peers.set(id, entry);
     pc.onicecandidate = (e) => e.candidate && this.signal(id, { t: 'ice', c: e.candidate.toJSON() });
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') this.onPeer(id, 'connected');
-      if (pc.connectionState === 'failed') this.onPeer(id, 'failed');
+      if (pc.connectionState === 'connected' && !this.forcePipe) { clearTimeout(entry.timer); this.onPeer(id, 'connected', false); }
+      if (pc.connectionState === 'failed') this.pipe(id);
     };
     return entry;
   }
@@ -86,6 +119,75 @@ class PartyRtc {
     el.muted = true;
     el.play().catch(() => {});
     this.sinks.set(id, el);
+  }
+
+  // The sound with this peer goes by the pipe from now on.
+  pipe(id) {
+    const entry = this.peers.get(id);
+    if (!entry || entry.piped) return;
+    entry.piped = true;
+    clearTimeout(entry.timer);
+    entry.voice?.disconnect();
+    entry.pc.close();
+    const el = this.sinks.get(id);
+    if (el) { el.srcObject = null; this.sinks.delete(id); }
+    if (this.ctx.state !== 'running') this.ctx.resume();
+    entry.feed = new AudioWorkletNode(this.ctx, 'party-in', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+    entry.count = 0;
+    entry.decoder = new AudioDecoder({
+      output: (data) => {
+        const x = new Float32Array(data.numberOfFrames);
+        data.copyTo(x, { planeIndex: 0, format: 'f32-planar' });
+        data.close();
+        entry.feed.port.postMessage(x.buffer, [x.buffer]);
+      },
+      error: () => {},
+    });
+    entry.decoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1 });
+    if (this.isGuest) {
+      if (this.mic && !this.micNode) { this.micNode = this.ctx.createMediaStreamSource(this.mic); this.micNode.connect(this.sendBus); }
+      const dest = this.ctx.createMediaStreamDestination();
+      entry.feed.connect(dest);
+      this.onVoice(dest.stream);
+    } else {
+      entry.voice = entry.feed;
+      entry.feed.connect(this.bus);
+    }
+    this.onPeer(id, 'connected', true);
+  }
+
+  // 20 ms of what this side sends → Opus → every peer on the pipe.
+  encode(buffer) {
+    let any = false;
+    for (const p of this.peers.values()) if (p.piped) { any = true; break; }
+    if (!any) return;
+    if (!this.encoder) {
+      this.encoder = new AudioEncoder({
+        output: (chunk) => {
+          const bytes = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(bytes);
+          const d = btoa(String.fromCharCode.apply(null, bytes));
+          for (const [id, p] of this.peers) if (p.piped) this.sendAudio(id, d);
+        },
+        error: () => { this.encoder = null; },
+      });
+      this.encoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1, bitrate: 40000 });
+    }
+    const data = new AudioData({ format: 'f32', sampleRate: 48000, numberOfFrames: 960, numberOfChannels: 1, timestamp: this.sent++ * 20000, data: new Float32Array(buffer) });
+    this.encoder.encode(data);
+    data.close();
+  }
+
+  // A piece of sound arrived by the pipe: the other side has given up on WebRTC, so this side does too.
+  onAudio(id, d) {
+    const entry = this.peers.get(id);
+    if (!entry || typeof d !== 'string') return;
+    if (!entry.piped) this.pipe(id);
+    try {
+      const raw = atob(d), bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      entry.decoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: entry.count++ * 20000, data: bytes }));
+    } catch {}
   }
 
   // Host: a guest was let in.
@@ -110,6 +212,7 @@ class PartyRtc {
   async asGuest(mic) {
     await this.ready;
     this.mic = mic;
+    this.isGuest = true;
   }
 
   async onSignal(id, msg) {
@@ -139,7 +242,10 @@ class PartyRtc {
   close(id) {
     const entry = this.peers.get(id);
     if (!entry) return;
+    clearTimeout(entry.timer);
     entry.voice?.disconnect();
+    entry.feed?.disconnect();
+    try { entry.decoder?.close(); } catch {}
     entry.pc.close();
     this.peers.delete(id);
     const el = this.sinks.get(id);
@@ -150,6 +256,7 @@ class PartyRtc {
   async destroy() {
     for (const id of [...this.peers.keys()]) this.close(id);
     this.setSource(null);
+    try { this.encoder?.close(); } catch {}
     await this.ctx.close().catch(() => {});
   }
 }

@@ -743,12 +743,13 @@ ipcMain.handle('party:forget', async () => { // everything the party window's pr
 // Friends: found by a code, let in by hand (party-net.js). The window is told what happens and
 // carries the WebRTC side itself.
 const { PartyNet, normalizeCode } = require('./party-net.js');
+const PARTY_STUN = [['stun.l.google.com', 19302], ['stun.cloudflare.com', 3478], ['stun.nextcloud.com', 3478], ['stun.sipnet.ru', 3478]]; // the same list as app/party-rtc.js
 let partyNet = null;
 const partyTell = (name, payload) => win && !win.isDestroyed() && win.webContents.send('party:event', name, payload);
 function partyNetwork() {
   if (partyNet) return partyNet;
   partyNet = new PartyNet(require('hyperswarm'));
-  for (const name of ['request', 'member', 'left', 'signal', 'waiting', 'joined', 'denied', 'ended']) partyNet.on(name, (payload) => partyTell(name, payload));
+  for (const name of ['request', 'member', 'left', 'signal', 'audio', 'waiting', 'joined', 'denied', 'ended']) partyNet.on(name, (payload) => partyTell(name, payload));
   return partyNet;
 }
 ipcMain.handle('party:host', async () => {
@@ -770,6 +771,36 @@ ipcMain.handle('party:join', async (_e, code, name) => {
 ipcMain.handle('party:answer', (_e, id, ok) => !!partyNet?.answer(String(id), !!ok));
 ipcMain.handle('party:kick', (_e, id) => void partyNet?.kick(String(id)));
 ipcMain.on('party:signal', (_e, id, msg) => partyNet?.signal(String(id), msg));
+ipcMain.on('party:audio', (_e, id, d) => partyNet?.audio(String(id), d));
+// What this computer's network allows, in the terms the party depends on: can it reach the public
+// directory where codes are looked up, does its router keep one port per connection (or a new one
+// each time, which defeats a direct link unless the other side is better off), do STUN servers answer.
+function stunProbe(host, port) {
+  return new Promise((resolve) => {
+    const s = require('dgram').createSocket('udp4');
+    const done = (ok) => { clearTimeout(t); try { s.close(); } catch {} resolve(ok); };
+    const t = setTimeout(() => done(false), 2500);
+    s.on('error', () => done(false));
+    s.on('message', () => done(true));
+    s.send(Buffer.concat([Buffer.from([0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42]), crypto.randomBytes(12)]), port, host, (e) => e && done(false));
+  });
+}
+ipcMain.handle('party:check', async () => {
+  const out = { directory: false, ms: 0, symmetric: false, stun: 0, stunAll: PARTY_STUN.length };
+  let dht = null;
+  try {
+    const DHT = require('hyperdht');
+    dht = new DHT();
+    const t0 = Date.now();
+    out.directory = await Promise.race([dht.fullyBootstrapped().then(() => true), new Promise((r) => setTimeout(() => r(false), 12000))]);
+    out.ms = Date.now() - t0;
+    out.directory = out.directory && dht.nodes.toArray().length > 0;
+    out.symmetric = !!dht.randomized;
+  } catch {}
+  try { await dht?.destroy(); } catch {}
+  out.stun = (await Promise.all(PARTY_STUN.map(([h, p]) => stunProbe(h, p)))).filter(Boolean).length;
+  return out;
+});
 ipcMain.handle('party:leave', async () => {
   await partyNet?.leave();
   return true;
