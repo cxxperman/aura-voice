@@ -7,6 +7,8 @@
   "scripts": {
     "start": "electron .",
     "icons": "node scripts/make-icon.js",
+    "test:family": "node scripts/family-test.js",
+    "test:main": "node scripts/main-test.js",
     "dist": "electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
@@ -22,6 +24,7 @@
       "main.js",
       "preload.js",
       "hub-client.js",
+      "family.js",
       "ai-convert.js",
       "ai-worker.js",
       "ai-live.js",

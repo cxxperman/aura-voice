@@ -18,7 +18,8 @@ contextBridge.exposeInMainWorld('auraSystem', {
   catalogAdd: (item) => ipcRenderer.invoke('uwu:add', item),
   openCatalogSite: () => ipcRenderer.invoke('uwu:open'),
   coreInfo: () => ipcRenderer.invoke('core:info'),
-  coreGo: () => ipcRenderer.invoke('core:go'),
+  coreGo: (page) => ipcRenderer.invoke('core:go', page), // page — страница core.txt, например «general»
+  quit: () => ipcRenderer.invoke('app:quit'), // выйти совсем: пока значок у core.txt, своего меню с «Выход» нет
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
   aiStatus: () => ipcRenderer.invoke('ai:status'),
   aiDownload: () => ipcRenderer.invoke('ai:download'),

@@ -1,8 +1,9 @@
-const { app, BrowserWindow, session, ipcMain, Tray, Menu, globalShortcut, dialog, shell, nativeTheme, net, utilityProcess } = require('electron');
+const { app, BrowserWindow, session, ipcMain, Tray, Menu, Notification, globalShortcut, dialog, shell, nativeTheme, net, utilityProcess } = require('electron');
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const { Family, TrayGate, accelOk, hotkeyPlan, auraKeys, auraTray } = require('./family'); // aura.txt в семье dev.txt: kit.txt, hub/PROTOCOL.md, «Семья»
 
 // Dev-only flags: --shot=<png> saves a screenshot and quits, --test runs the DSP self-check.
 const shotArg = process.argv.find((a) => a.startsWith('--shot='));
@@ -25,6 +26,9 @@ if (devRun) app.setPath('userData', path.join(app.getPath('temp'), 'aura-dev-pro
 if (shotArg) app.disableHardwareAcceleration(); // dev screenshots: software rendering works with the display off
 
 if (!devRun && !app.requestSingleInstanceLock()) app.quit();
+// Уведомления Windows и кнопка на панели задач — от имени ярлыка «Пуск», который ставит установщик: у него этот же id
+// (build.appId в package.json). Без него Windows не показывает уведомления приложения.
+if (process.platform === 'win32' && app.isPackaged) app.setAppUserModelId('app.aura.voice');
 
 let win;
 let tray;
@@ -85,14 +89,18 @@ function createWindow() {
     if (quitting || devRun) return;
     e.preventDefault();
     win.hide();
+    // Один раз подсказать, где теперь aura.txt (tellUser: остров kapsula.txt, свой значок или уведомление Windows).
+    // Значок у core.txt — подсказка про его меню и про выход в «Настройках». Показать было нельзя — подскажем в другой раз.
     const flag = path.join(app.getPath('userData'), 'tray-hint-shown');
     if (!fs.existsSync(flag)) {
-      fs.writeFileSync(flag, '');
-      tray?.displayBalloon({
-        title: 'aura.txt осталась в трее',
-        content: 'Голос продолжает обрабатываться. Чтобы закрыть совсем — правый клик по рыбке → «Выйти».',
-        icon: asset('icon.png'),
-      });
+      const told = family.hideOwnTray
+        ? tellUser('aura.txt работает в фоне', 'Голос продолжает обрабатываться. Окно открывается из меню core.txt в трее, а выйти можно в «Настройках».')
+        : tellUser('aura.txt осталась в трее', 'Голос продолжает обрабатываться. Чтобы закрыть совсем — правый клик по рыбке → «Выход».');
+      if (told) {
+        try {
+          fs.writeFileSync(flag, '');
+        } catch {}
+      }
     }
   });
 
@@ -301,34 +309,25 @@ ipcMain.handle('uwu:add', async (_e, item) => {
 ipcMain.handle('uwu:open', () => shell.openExternal(UWU_SITE));
 
 /* ───── Hotkeys ─────
- * The window owns the configuration and re-sends all of it on every change. */
-const accelOk = (a) => typeof a === 'string' && /^((Ctrl|Alt|Shift)\+){0,3}([A-Z0-9]|F\d{1,2}|num\d|Space|Up|Down|Left|Right|Home|End|PageUp|PageDown|Insert)$/.test(a);
+ * The window owns the configuration and re-sends all of it on every change.
+ * Что и в каком порядке занимается (обработка, микрофон, голоса, звуки) — hotkeyPlan() в family.js;
+ * тот же список уходит в aura.keys, на страницу «Клавиши» в core.txt. */
+let keyConfig = null; // что окно прислало последним — для aura.keys
 ipcMain.handle('hotkeys:set', (_e, config) => {
   if (devRun) return [];
   globalShortcut.unregisterAll();
   const failed = [];
-  const used = new Set();
-  const bind = (accel, action) => {
-    if (!accelOk(accel) || used.has(accel)) return;
-    used.add(accel);
+  for (const k of hotkeyPlan(config)) {
     let ok = false;
     try {
-      ok = globalShortcut.register(accel, action);
+      ok = globalShortcut.register(k.accel, () => command(k.action, k.arg));
     } catch {}
-    if (!ok) failed.push(accel); // some other program already owns this combination
-  };
-  hotkeys = { power: accelOk(config?.power) ? config.power : '', mute: accelOk(config?.mute) ? config.mute : '' };
-  bind(hotkeys.power, () => command('power'));
-  bind(hotkeys.mute, () => command('mute'));
-  // Ready voices with a key of their own; pressing the key again returns to the normal voice.
-  for (const [id, accel] of Array.isArray(config?.voices) ? config.voices.slice(0, 40) : []) {
-    if (typeof id === 'string' && /^[a-z]{2,20}$/.test(id)) bind(accel, () => command('voice', id));
+    if (!ok) failed.push(k.accel); // some other program already owns this combination
   }
-  const pads = Array.isArray(config?.pads) ? config.pads.slice(0, 200) : [];
-  pads.forEach((key, i) => key && bind(key, () => command('pad', i)));
-  // Pads without a key of their own: the first nine get Ctrl+Alt+digit.
-  pads.forEach((key, i) => !key && i < 9 && bind(`Ctrl+Alt+${i + 1}`, () => command('pad', i)));
+  hotkeys = { power: accelOk(config?.power) ? config.power : '', mute: accelOk(config?.mute) ? config.mute : '' };
+  keyConfig = config && typeof config === 'object' ? config : null;
   refreshTray();
+  publishKeys();
   return failed;
 });
 
@@ -711,7 +710,9 @@ function showWindow() {
   win.show();
   win.focus();
 }
-const command = (name, arg) => win?.webContents.send('tray:command', name, arg);
+const command = (name, arg) => {
+  if (win && !win.isDestroyed()) win.webContents.send('tray:command', name, arg);
+};
 
 function refreshTray() {
   if (!tray) return;
@@ -741,7 +742,10 @@ function refreshTray() {
         type: 'checkbox',
         enabled: app.isPackaged, // only meaningful for the installed app
         checked: app.isPackaged && app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin,
-        click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'] }),
+        click: (item) => {
+          app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'] });
+          command('autostart'); // строка в окне и пункт в core.txt («Общие» → «Запуск и обновления») — по новому состоянию
+        },
       },
       { type: 'separator' },
       {
@@ -756,9 +760,59 @@ function refreshTray() {
 }
 
 function createTray() {
+  if (tray) return;
   tray = new Tray(asset('tray-off.png'));
   tray.on('click', showWindow);
   refreshTray();
+}
+function dropTray() {
+  if (!tray) return;
+  tray.destroy();
+  tray = null;
+}
+
+/* ───── Одна семья с core.txt (kit.txt, hub/PROTOCOL.md, «Семья») ─────
+ * Пока core.txt на связи и держит один значок на всех, своего значка нет: первые пункты меню aura.txt (aura.tray)
+ * стоят в меню core.txt, горячие клавиши (aura.keys) — на его странице «Клавиши». Связь пропала — свой значок
+ * возвращается сразу, с полным меню. Короткие сообщения человеку — на острове kapsula.txt, если он на связи. */
+// Окну — «family»: строка «Выйти из aura.txt» в «Настройках» видна, только пока своего значка (и его «Выход») нет
+const trayGate = new TrayGate((show) => {
+  if (show) createTray();
+  else dropTray();
+  command('family');
+});
+const family = new Family('aura', () => {
+  trayGate.set(family.hideOwnTray, family.coreOnline);
+  command('family');
+});
+const trayActions = { show: showWindow, power: () => command('power'), mute: () => command('mute') };
+const publishTray = () => family.setTray(auraTray(ui, trayActions));
+function publishKeys() {
+  if (keyConfig) family.setKeys(auraKeys(keyConfig, { voices: new Map(ui.voices.map((v) => [v.id, v.name])) }));
+}
+// Сообщение человеку: на острове kapsula.txt, если он на связи. Иначе своё: подсказка у своего значка, а когда значок
+// у core.txt (или вот-вот уйдёт к нему вместе с подсказкой) — уведомление Windows.
+// false — показать негде или сейчас нельзя (в core.txt включено «Не беспокоить»).
+function tellUser(title, text) {
+  const balloon = () => {
+    tray.displayBalloon({ title, content: text, icon: asset('icon.png') });
+    return true;
+  };
+  const own = () => {
+    if (family.focus) return false;
+    if (tray && !family.hideOwnTray) return balloon();
+    return toast(title, text) || (!!tray && balloon());
+  };
+  return family.notify(title, text, true, own) || own();
+}
+// Уведомление Windows. Только у установленной копии: Windows показывает их от имени ярлыка установщика (setAppUserModelId выше).
+let lastToast = null; // ссылка держит щелчок по уведомлению живым
+function toast(title, text) {
+  if (!app.isPackaged || !Notification.isSupported()) return false;
+  lastToast = new Notification({ title, body: text, icon: asset('icon.png'), silent: true });
+  lastToast.on('click', showWindow);
+  lastToast.show();
+  return true;
 }
 
 ipcMain.on('ui:state', (_e, state) => {
@@ -774,6 +828,8 @@ ipcMain.on('ui:state', (_e, state) => {
     voices: Array.isArray(state.voices) ? state.voices.slice(0, 40).map((v) => ({ id: String(v.id), name: String(v.name) })) : [],
   };
   refreshTray();
+  publishTray(); // галочки в меню core.txt — те же, что в своём
+  publishKeys(); // названия голосов для aura.keys приходят отсюда
   // Other dev.txt apps see what the voice is doing (the island can show it, for example)
   hub?.state('aura.voice', { on: ui.on, mute: ui.mute, preset: ui.preset, presetName: ui.presetName, voice: ui.voice });
 });
@@ -801,7 +857,8 @@ function askWindow(kind, args) {
   });
 }
 function startHub() {
-  hub = hubConnect({
+  // family.wrap() добавляет к темам core.family и hub.apps, к командам — tray.run (пункты aura.txt в меню core.txt)
+  hub = hubConnect(family.wrap({
     app: 'aura',
     name: 'aura.txt',
     version: app.getVersion(),
@@ -810,14 +867,21 @@ function startHub() {
     commands: {
       'settings.set': (args) => askWindow('set', args),
       'settings.run': (args) => askWindow('run', args),
-      show: () => { showWindow(); return null; },
+      // core.txt открывает окно; со страницей «keys» — сразу на горячих клавишах
+      show: (args) => {
+        showWindow();
+        if (args?.page === 'keys') command('page', 'keys');
+        return null;
+      },
     },
     onState(topic, data) {
       if (topic !== 'hub.theme') return;
       hubTheme = data;
       win?.webContents.send('hub:theme', data);
     },
-  });
+  }));
+  family.attach(hub);
+  publishTray();
 }
 ipcMain.on('hub:settings', (_e, settings) => {
   if (settings && typeof settings === 'object') hub?.state('aura.settings', settings);
@@ -836,13 +900,21 @@ ipcMain.handle('hub:theme', () => hubTheme);
 const CORE_URL = 'https://github.com/cxxperman/core.txt/releases/latest/download/Core.exe';
 const corePath = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'dev.txt', 'Core.exe');
 const coreInstalled = () => { try { return fs.existsSync(corePath); } catch { return false; } };
-ipcMain.handle('core:info', () => ({ online: !!hub?.online, installed: coreInstalled() }));
-async function coreGo() {
-  if (hub?.online) { await hub.command('core', 'show', null); return; }
-  if (coreInstalled()) { const { spawn } = require('child_process'); spawn(corePath, [], { detached: true, stdio: 'ignore' }).unref(); return; }
+// quitHere — значок aura.txt сейчас у core.txt, своего меню с «Выход» нет: выход — кнопкой в «Настройках»
+ipcMain.handle('core:info', () => ({ online: !!hub?.online, installed: coreInstalled(), quitHere: !devRun && !tray && family.hideOwnTray }));
+ipcMain.handle('app:quit', () => {
+  quitting = true;
+  app.quit();
+  return true;
+});
+// page — какую страницу core.txt открыть («general» — «Общие», где «Запуск и обновления»): запущенному — просьбой show,
+// не запущенному — ключом --page (прежний core.txt незнакомую страницу пропускает и просто открывается)
+async function coreGo(page) {
+  if (hub?.online) { await hub.command('core', 'show', page ? { page } : null); return; }
+  if (coreInstalled()) { spawn(corePath, page ? ['--page', page] : [], { detached: true, stdio: 'ignore' }).unref(); return; }
   await shell.openExternal(CORE_URL);
 }
-ipcMain.handle('core:go', () => coreGo());
+ipcMain.handle('core:go', (_e, page) => coreGo(typeof page === 'string' && /^(general|games|keys)$/.test(page) ? page : null));
 
 /* ───── System module (APO) ───── */
 const dataDir = path.join(process.env.ProgramData || 'C:\\ProgramData', 'Aura');
@@ -1016,7 +1088,9 @@ app.whenReady().then(() => {
   checkAttached();
   setInterval(checkAttached, 60000);
   if (!devRun) {
-    createTray();
+    // core.txt стоит на этом компьютере — до трёх секунд ждём, не возьмёт ли он значок: так при входе в Windows значок
+    // aura.txt не мелькает. Не ответил — свой значок появляется: без входа aura.txt не остаётся.
+    trayGate.start(coreInstalled() ? 3000 : 0);
   // Start with Windows, in the tray, unless the user says otherwise. The choice is made once, on
   // the first run of an installed copy; after that the switch in Settings (or the tray) decides.
   const asked = path.join(app.getPath('userData'), 'autostart.set');
@@ -1035,6 +1109,7 @@ app.whenReady().then(() => {
 app.on('second-instance', showWindow);
 app.on('before-quit', () => {
   quitting = true;
+  trayGate.stop(); // связь сейчас закроется — свой значок из-за этого уже не появляется
   hub?.close(); // says goodbye, so the launcher drops Aura's settings at once
 });
 

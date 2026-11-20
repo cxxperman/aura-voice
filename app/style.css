@@ -163,7 +163,11 @@ h1 {
 .update-chip:active { transform: scale(0.96); transition-duration: 80ms; }
 .update-chip:disabled { opacity: 0.6; cursor: default; }
 .devices > .switch.core-row { cursor: default; }
-.switch.core-row[hidden] { display: none; }
+.switch[hidden] { display: none; } /* и строки, которые сейчас настраиваются в core.txt */
+/* «Запуск и обновления»: часть строк прячется (core.txt установлен, значок у него) — черта только между видимыми */
+#startGroup > .switch::before { content: none; }
+#startGroup > :not([hidden]) ~ .switch::before { content: ''; }
+#keysTitle { scroll-margin-top: 12px; } /* core.txt открывает «Настройки» сразу здесь */
 .switch + .switch::before { content: ''; position: absolute; left: 18px; right: 0; top: 0; height: 0.5px; background: var(--sep); }
 .fx-chip:active { transform: scale(0.96); transition-duration: 80ms; }
 

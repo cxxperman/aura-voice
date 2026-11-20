@@ -455,11 +455,14 @@ async function setPower(on) {
  * by operating the same control — so the launcher and the window can never disagree. */
 const HUB_SWITCHES = ['auto', 'monitor', 'dehum', 'autostart', 'autoUpdate'];
 const HUB_SELECTS = ['nsEngine', 'loudTarget'];
-const hubSwitch = (id) => {
+// section — общая страница core.txt, где показать пункт вместо страницы aura.txt («startup» — «Запуск и обновления»)
+const hubSwitch = (id, section) => {
   const el = $('#' + id);
   const label = el?.closest('label');
   if (!el || !label || el.disabled) return null;
-  return { key: id, type: 'switch', label: label.querySelector('b')?.textContent || id, hint: label.querySelector('small')?.textContent || '', value: el.checked };
+  const item = { key: id, type: 'switch', label: label.querySelector('b')?.textContent || id, hint: label.querySelector('small')?.textContent || '', value: el.checked };
+  if (section) item.section = section;
+  return item;
 };
 const hubSelect = (id) => {
   const el = $('#' + id);
@@ -482,7 +485,7 @@ function hubSettingsNow() {
         hubSwitch('monitor'),
       ]) },
       { title: 'Звук', items: only([hubSelect('nsEngine'), hubSelect('loudTarget'), hubSwitch('dehum')]) },
-      { title: 'Запуск и обновления', items: only([hubSwitch('autostart'), hubSwitch('autoUpdate')]) },
+      { title: 'Запуск и обновления', items: only([hubSwitch('autostart', 'startup'), hubSwitch('autoUpdate', 'startup')]) },
     ],
   };
 }
@@ -1678,7 +1681,8 @@ addEventListener(
 
 async function syncHotkeys() {
   if (!window.auraSystem?.setHotkeys || TEST) return;
-  const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null), voices: Object.entries(state.fxKeys) });
+  // padNames — для страницы «Клавиши» в core.txt: там у звука видно его название
+  const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null), padNames: state.pads.map((p) => p.name), voices: Object.entries(state.fxKeys) });
   const next = new Set(fixture ? fixture.failedHotkeys : failed || []);
   const changed = next.size !== hotkeyFailed.size || [...next].some((accel) => !hotkeyFailed.has(accel));
   hotkeyFailed = next;
@@ -1917,6 +1921,21 @@ function showTab(name) {
   }
 }
 for (const b of tabButtons) b.addEventListener('click', () => showTab(b.dataset.tab));
+// core.txt просит открыть страницу (show с page). Своё место здесь есть только у горячих клавиш — внизу «Настроек».
+function openPage(page) {
+  if (page !== 'keys') return;
+  showTab('setup');
+  const title = $('#keysTitle');
+  const calm = REDUCED_MOTION || document.documentElement.hasAttribute('data-reduced-motion');
+  requestAnimationFrame(() => title.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' }));
+  // Список микрофонов выше мог дорисоваться и сдвинуть раздел, а плавная прокрутка — не дойти: тогда сразу на место
+  setTimeout(() => {
+    const page = title.parentElement.getBoundingClientRect();
+    const top = Math.max(page.top, 0), bottom = Math.min(page.bottom, innerHeight);
+    const keys = (title.nextElementSibling || title).getBoundingClientRect();
+    if (title.getBoundingClientRect().top < top || keys.bottom > bottom) title.scrollIntoView({ block: 'start' });
+  }, 900);
+}
 for (const group of [$('#tabs'), presetsEl]) {
   group.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
@@ -2686,7 +2705,18 @@ $('#aiFile').addEventListener('click', async () => {
 });
 
 /* ───────── Start with Windows ───────── */
-window.auraSystem?.getAutostart?.().then((on) => ($('#autostart').checked = !!on));
+// Переключить можно и в меню значка: тогда main.js присылает «autostart», и галочка здесь, и пункт в core.txt
+// («Общие» → «Запуск и обновления») берут настоящее состояние, а не то, что было при открытии окна
+function readAutostart(publish) {
+  window.auraSystem?.getAutostart?.().then((on) => {
+    $('#autostart').checked = !!on;
+    if (publish) publishHubSettings();
+  }, () => {});
+}
+readAutostart(false);
+window.auraSystem?.onCommand?.((name) => {
+  if (name === 'autostart') readAutostart(true);
+});
 $('#autostart').addEventListener('change', async (e) => {
   e.target.checked = !!(await window.auraSystem.setAutostart(e.target.checked));
 });
@@ -2964,6 +2994,7 @@ async function boot() {
     if (name === 'preset') selectPreset(arg);
     if (name === 'voice') selectVoice(arg === state.fx ? 'none' : arg); // the same key again switches it off
     if (name === 'pad' && state.pads[arg]) playPad(state.pads[arg]);
+    if (name === 'page') openPage(arg);
     if (name === 'mute' && sys.installed) {
       $('#mute').checked = state.mute = !state.mute;
       save();
@@ -2988,24 +3019,43 @@ async function boot() {
 }
 boot();
 
-/* ───── The way to core.txt ─────
- * One quiet row in the settings: open the launcher, or fetch it when it is not here yet. */
-(function coreRow() {
-  const row = document.getElementById('coreRow'), btn = document.getElementById('coreBtn'), hint = document.getElementById('coreHint');
+/* ───── Запуск, обновления и дорога к core.txt ─────
+ * Своя группа внизу «Настроек». Без core.txt — переключатели запуска и обновлений и тихая строка «Скачать core.txt».
+ * Когда core.txt установлен, запуск вместе с Windows и обновления настраиваются в нём (пункты с section: "startup"
+ * в aura.settings): их строки здесь прячутся, вместо них — «Настраивается в core.txt» с кнопкой на его страницу
+ * «Общие». Ключи и значения те же — меняется только место, где их видно. Пока значок aura.txt у core.txt, своего
+ * меню с «Выход» нет, а в меню core.txt выхода для приложений нет: тогда здесь же строка «Выйти из aura.txt». */
+(function startupGroup() {
+  const row = document.getElementById('coreRow'), btn = document.getElementById('coreBtn'), title = document.getElementById('coreTitle'), hint = document.getElementById('coreHint');
+  const quitRow = document.getElementById('quitRow'), quitBtn = document.getElementById('quitBtn');
   const sys = window.auraSystem;
-  if (!row || !btn || !sys?.coreInfo) return;
+  if (!row || !btn || !title || !sys?.coreInfo) return;
+  const startupRows = ['autostart', 'autoUpdate'].map((id) => document.getElementById(id)?.closest('label')).filter(Boolean);
+  let installed = false;
   async function paint() {
     const info = await sys.coreInfo().catch(() => null);
     if (!info) return;
-    const here = info.online || info.installed;
+    installed = !!info.installed;
+    const here = info.online || installed;
+    for (const r of startupRows) r.hidden = installed;
+    title.textContent = installed ? 'Настраивается в core.txt' : 'core.txt — лаунчер dev.txt';
     btn.textContent = here ? 'Открыть core.txt' : 'Скачать core.txt';
     btn.classList.toggle('prominent', !here);
-    hint.textContent = here
-      ? 'Обновления, общие настройки и остальные приложения dev.txt — в одном окне'
-      : 'Все приложения dev.txt в одном окне: установка, обновления и общие настройки. aura.txt работает и без него';
+    hint.textContent = installed
+      ? 'На странице «Общие», рядом с остальными приложениями dev.txt'
+      : here
+        ? 'Обновления, общие настройки и остальные приложения dev.txt — в одном окне'
+        : 'Все приложения dev.txt в одном окне: установка, обновления и общие настройки. aura.txt работает и без него';
     row.hidden = false;
+    if (quitRow) quitRow.hidden = !info.quitHere || !sys.quit;
   }
-  btn.addEventListener('click', async () => { await sys.coreGo().catch(() => {}); setTimeout(paint, 1500); });
+  // Установлен — сразу на «Общие» (core.txt запущен — просьбой через хаб, нет — запуском с этой страницей), нет — скачать
+  btn.addEventListener('click', async () => { await sys.coreGo(installed ? 'general' : undefined).catch(() => {}); setTimeout(paint, 1500); });
+  quitBtn?.addEventListener('click', () => sys.quit?.());
+  // Значок ушёл к core.txt или вернулся, core.txt появился или пропал — main.js присылает «family»
+  sys.onCommand?.((name) => {
+    if (name === 'family') paint();
+  });
   window.addEventListener('focus', paint);
   paint();
 })();

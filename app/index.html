@@ -190,9 +190,6 @@
           <label class="field"><span>Профиль микрофона</span><select id="micProfile"></select></label>
           <label class="field"><span>Громкость на выходе</span><select id="loudTarget"><option value="0">Не выравнивать</option><option value="-18">−18 LUFS — звонки и Discord</option><option value="-16">−16 LUFS — подкаст</option><option value="-14">−14 LUFS — YouTube и стрим (плотнее, лимитер работает чаще)</option></select></label>
           <label class="field"><span>Шумодав</span><select id="nsEngine"><option value="0">Обычный — RNNoise, 10 мс (рекомендуется)</option><option value="1">Жёсткий — DeepFilterNet, 30 мс: давит шум сильнее, но меняет голос</option></select></label>
-          <label class="switch"><span><b>Запускать вместе с Windows</b><small>aura.txt открывается свёрнутой в трей, обработка голоса работает сразу</small></span><input type="checkbox" id="autostart"><i></i></label>
-          <label class="switch"><span><b>Проверять обновления</b><small>При запуске спрашивает у GitHub, вышла ли новая версия. Устанавливается только по вашему нажатию</small></span><input type="checkbox" id="autoUpdate"><i></i></label>
-          <div class="switch core-row" id="coreRow" hidden><span><b>core.txt — лаунчер dev.txt</b><small id="coreHint"></small></span><button type="button" class="pill small" id="coreBtn">Открыть core.txt</button></div>
           <label class="switch"><span><b>Убрать гул сети</b><small>Вырезает 50 Гц и его гармоники — гудение от розетки и плохой земли</small></span><input type="checkbox" id="dehum"><i></i></label>
           <label class="field gain"><span>Усиление входа <b id="inGainVal">0 дБ</b></span><input type="range" id="inGain" min="-12" max="18" step="1"></label>
           <label class="field gain"><span>Громкость выхода <b id="outGainVal">0 дБ</b></span><input type="range" id="outGain" min="-18" max="6" step="1"></label>
@@ -200,10 +197,18 @@
 
         <p class="footnote" id="micNote"></p>
 
-        <div class="section-title"><span>Горячие клавиши</span></div>
+        <div class="section-title" id="keysTitle"><span>Горячие клавиши</span></div>
         <div class="group devices">
           <div class="field key"><span>Обработка голоса</span><button type="button" class="hotkey" id="key-power"></button><small class="key-note" id="note-power" role="status"></small></div>
           <div class="field key"><span>Заглушить микрофон</span><button type="button" class="hotkey" id="key-mute"></button><small class="key-note" id="note-mute" role="status"></small></div>
+        </div>
+
+        <div class="section-title"><span>Запуск и обновления</span></div>
+        <div class="group devices" id="startGroup">
+          <label class="switch"><span><b>Запускать вместе с Windows</b><small>aura.txt открывается свёрнутой в трей, обработка голоса работает сразу</small></span><input type="checkbox" id="autostart"><i></i></label>
+          <label class="switch"><span><b>Проверять обновления</b><small>При запуске спрашивает у GitHub, вышла ли новая версия. Устанавливается только по вашему нажатию</small></span><input type="checkbox" id="autoUpdate"><i></i></label>
+          <div class="switch core-row" id="coreRow" hidden><span><b id="coreTitle">core.txt — лаунчер dev.txt</b><small id="coreHint"></small></span><button type="button" class="pill small" id="coreBtn">Открыть core.txt</button></div>
+          <div class="switch core-row" id="quitRow" hidden><span><b>Выйти из aura.txt</b><small>Обработка голоса остановится до следующего запуска</small></span><button type="button" class="pill small" id="quitBtn">Выйти</button></div>
         </div>
       </div>
     </section>
