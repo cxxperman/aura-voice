@@ -1,6 +1,9 @@
 /* Aura — the window. The structure is a native one: a sidebar, a large page title, grouped
  * surfaces, system controls. The material is Aura's own: a dark room, glass panels, and the
- * colour of the current character glowing behind them and tinting every accent. */
+ * colour of the current character glowing behind them and tinting every accent.
+ *
+ * Colours, radii, fonts and the easing curve come from tokens.css — the shared dev.txt tokens,
+ * generated in kit.txt and copied here as is. Aura keeps its own names for them below. */
 
 @property --hue {
   syntax: '<number>';
@@ -11,28 +14,28 @@
 :root {
   color-scheme: dark;
   --hue: 212; /* the current character's colour */
-  transition: --hue 700ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: --hue 700ms var(--dt-ease-out);
 
-  --bg: #09090d;
+  --bg: var(--dt-bg);
   --group: rgba(255, 255, 255, 0.055);
-  --edge: rgba(255, 255, 255, 0.09);
-  --edge-top: rgba(255, 255, 255, 0.17);
-  --label: rgba(255, 255, 255, 0.96);
-  --label-2: rgba(255, 255, 255, 0.64);
-  --label-3: rgba(255, 255, 255, 0.42);
-  --sep: rgba(255, 255, 255, 0.08);
-  --fill: rgba(255, 255, 255, 0.08);
-  --fill-2: rgba(255, 255, 255, 0.14);
-  --fill-press: rgba(255, 255, 255, 0.22);
+  --edge: var(--dt-edge);
+  --edge-top: var(--dt-edge-top);
+  --label: var(--dt-label);
+  --label-2: var(--dt-label-2);
+  --label-3: var(--dt-label-3);
+  --sep: var(--dt-separator);
+  --fill: var(--dt-fill);
+  --fill-2: var(--dt-fill-2);
+  --fill-press: var(--dt-fill-press);
   --seg-selected: rgba(255, 255, 255, 0.16);
   --accent: hsl(var(--hue) 95% 68%);
   --accent-solid: hsl(var(--hue) 78% 52%);
   --accent-tint: hsl(var(--hue) 90% 60% / 0.2);
-  --green: #30d158;
-  --red: #ff6961;
-  --warn: #ffd60a;
+  --green: var(--dt-green);
+  --red: var(--dt-red);
+  --warn: var(--dt-yellow);
   --knob: #ffffff;
-  --menu: rgba(30, 30, 38, 0.82);
+  --menu: var(--dt-menu);
   --shadow-group: 0 14px 40px rgba(0, 0, 0, 0.24);
   --shadow-knob: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
@@ -41,7 +44,7 @@
 html, body { height: 100%; }
 
 body {
-  font: 400 13.5px/1.4 -apple-system, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  font: 400 13.5px/1.4 var(--dt-font-text);
   color: var(--label);
   background: var(--bg);
   overflow: hidden;
@@ -73,28 +76,28 @@ body.on .backdrop { opacity: 1; }
   position: fixed; inset: 0; z-index: 10;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px;
   background: var(--bg);
-  transition: opacity 380ms ease, transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 380ms ease, transform 520ms var(--dt-ease-out);
   animation: intro-failsafe 400ms 4500ms forwards; /* never leave the window covered, whatever happens */
 }
 .intro.leaving { opacity: 0; transform: scale(1.08); pointer-events: none; }
 .intro-fish {
   display: grid; grid-template-columns: repeat(12, 15px); grid-auto-rows: 15px;
-  animation: intro-swim 1100ms 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: intro-swim 1100ms 300ms var(--dt-ease-out) both;
 }
-.intro-fish i { opacity: 0; transform: scale(0.2) translate(14px, 6px); animation: intro-pixel 460ms cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.intro-fish i { opacity: 0; transform: scale(0.2) translate(14px, 6px); animation: intro-pixel 460ms var(--dt-ease-out) forwards; }
 .intro-fish i.body { background: #f08a4b; box-shadow: 0 0 0 0.5px #f08a4b; } /* the hairline hides seams between pixels in motion */
 .intro-fish i.eye { background: #1a1a1e; }
 .intro-name {
-  font: 700 28px/1 -apple-system, 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  font: 700 28px/1 var(--dt-font-display);
   letter-spacing: -0.02em; color: var(--label); opacity: 0;
-  animation: intro-name 760ms 560ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: intro-name 760ms 560ms var(--dt-ease-out) forwards;
 }
 @keyframes intro-pixel { to { opacity: 1; transform: none; } }
 @keyframes intro-swim { from { transform: translateX(26px); } to { transform: none; } } /* it faces left: nose first */
 @keyframes intro-name { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes intro-failsafe { to { opacity: 0; visibility: hidden; } }
 /* Transform only: the curtain's own fade is what reveals the interface. */
-.hero, .controls { transition: transform 560ms cubic-bezier(0.22, 1, 0.36, 1); }
+.hero, .controls { transition: transform 560ms var(--dt-ease-out); }
 .controls { transition-delay: 60ms; }
 body.intro-on .hero, body.intro-on .controls { transform: translateY(12px); animation: intro-reveal 400ms 4500ms forwards; }
 @keyframes intro-reveal { to { transform: none; } }
@@ -111,27 +114,30 @@ body.intro-on .hero, body.intro-on .controls { transform: translateY(12px); anim
 .sidebar > * { flex: none; }
 .brand { position: absolute; top: 9px; left: 14px; display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--label-2); pointer-events: none; }
 .brand img { width: 16px; height: 16px; }
+.brand span { font-family: var(--dt-font-display); color: var(--label); }
+.brand span i { font-style: normal; color: var(--label-2); }
+.brand span sup { font-size: 0.6em; font-weight: 400; color: var(--label-3); vertical-align: top; line-height: 1.5; }
 
 /* The orb: Aura's power button and its live picture of the voice. It keeps its own dark disc in
  * both appearances — the light it draws needs darkness behind it. */
 .orb {
   position: relative; align-self: center; width: 216px; height: 216px; margin: -14px 0 -22px;
   border: 0; padding: 0; border-radius: 50%; cursor: pointer; background: none;
-  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 180ms var(--dt-ease-out);
 }
 .orb:active { transform: scale(0.965); transition-duration: 90ms; }
 .orb canvas { width: 100%; height: 100%; display: block; }
 .orb-icon {
   position: absolute; inset: 0; margin: auto; width: 30px; height: 30px;
   fill: none; stroke: rgba(255, 255, 255, 0.9); stroke-width: 1.8; stroke-linecap: round;
-  transition: opacity 300ms ease, transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 300ms ease, transform 300ms var(--dt-ease-out);
 }
 body.on .orb-icon { opacity: 0; transform: scale(0.7); }
 .orb:focus-visible { outline-offset: -30px; }
 
 h1 {
   margin-top: 0; text-align: center;
-  font: 700 26px/1.15 -apple-system, 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  font: 700 26px/1.15 var(--dt-font-display);
   letter-spacing: -0.015em;
 }
 .status {
@@ -145,25 +151,31 @@ h1 {
 .fx-chip {
   align-self: center; margin-top: 8px; height: 24px; padding: 0 10px; border: 0; border-radius: 12px; cursor: pointer;
   background: var(--accent-tint); color: var(--accent); font-size: 12px; font-weight: 600; white-space: pre;
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease;
+  transition: transform 160ms var(--dt-ease-out), background 160ms ease;
 }
 .fx-chip[hidden] { display: none; }
 .update-chip {
   align-self: center; margin-top: 8px; min-height: 26px; padding: 3px 12px; border: 0; border-radius: 13px; cursor: pointer;
   background: var(--accent-solid); color: #fff; font-size: 12px; font-weight: 600; box-shadow: 0 4px 18px hsl(var(--hue) 80% 50% / 0.4);
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease;
+  transition: transform 160ms var(--dt-ease-out), opacity 160ms ease;
 }
 .update-chip[hidden] { display: none; }
 .update-chip:active { transform: scale(0.96); transition-duration: 80ms; }
 .update-chip:disabled { opacity: 0.6; cursor: default; }
-.devices > .switch + .switch::before { content: ''; position: absolute; left: 18px; right: 0; top: 0; height: 0.5px; background: var(--sep); }
+.devices > .switch.core-row { cursor: default; }
+.switch[hidden] { display: none; } /* и строки, которые сейчас настраиваются в core.txt */
+/* «Запуск и обновления»: часть строк прячется (core.txt установлен, значок у него) — черта только между видимыми */
+#startGroup > .switch::before { content: none; }
+#startGroup > :not([hidden]) ~ .switch::before { content: ''; }
+#keysTitle { scroll-margin-top: 12px; } /* core.txt открывает «Настройки» сразу здесь */
+.switch + .switch::before { content: ''; position: absolute; left: 18px; right: 0; top: 0; height: 0.5px; background: var(--sep); }
 .fx-chip:active { transform: scale(0.96); transition-duration: 80ms; }
 
 /* Navigation: a macOS sidebar list. The selected row is filled with the accent colour. */
 .tabs { margin-top: 16px; display: flex; flex-direction: column; gap: 2px; -webkit-app-region: no-drag; }
 .tabs button {
   position: relative; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px;
-  border: 1px solid transparent; border-radius: 10px; background: none; text-align: left; font-size: 13.5px; font-weight: 500; color: var(--label-2); cursor: pointer;
+  border: 1px solid transparent; border-radius: var(--dt-radius-control); background: none; text-align: left; font-size: 13.5px; font-weight: 500; color: var(--label-2); cursor: pointer;
   transition: background 180ms ease, color 180ms ease;
 }
 .tabs svg { flex: none; width: 17px; height: 17px; fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -185,7 +197,7 @@ h1 {
 .content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .toolbar { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 34px 28px 10px; }
 h2 {
-  font: 700 26px/1.15 -apple-system, 'SF Pro Display', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  font: 700 26px/1.15 var(--dt-font-display);
   letter-spacing: -0.022em;
 }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -212,7 +224,7 @@ h2 {
   background: var(--group); border: 1px solid var(--edge); border-top-color: var(--edge-top);
   backdrop-filter: blur(40px) saturate(170%); box-shadow: var(--shadow-group);
 }
-.group { border-radius: 18px; }
+.group { border-radius: var(--dt-radius-block); }
 
 /* ───────── Controls ───────── */
 
@@ -220,7 +232,7 @@ h2 {
 .pill {
   height: 32px; padding: 0 15px; border: 1px solid var(--edge); border-top-color: var(--edge-top); border-radius: 16px; cursor: pointer;
   background: var(--fill); font-size: 13px; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums;
-  transition: background 120ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
+  transition: background 120ms ease, transform 160ms var(--dt-ease-out), opacity 200ms ease;
 }
 .pill.small { height: 26px; padding: 0 12px; font-size: 12.5px; }
 .pill:hover { background: var(--fill-2); }
@@ -231,11 +243,11 @@ h2 {
 .pill[hidden] { display: none; }
 
 /* Segmented control */
-.segmented { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 4px; border-radius: 15px; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--edge); backdrop-filter: blur(40px) saturate(170%); }
+.segmented { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 4px; border-radius: calc(var(--dt-radius-control) + 4px); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--edge); backdrop-filter: blur(40px) saturate(170%); }
 .segmented button {
-  height: 32px; padding: 0 6px; border: 0; border-radius: 11px; background: none; color: var(--label-2); cursor: pointer;
+  height: 32px; padding: 0 6px; border: 0; border-radius: var(--dt-radius-control); background: none; color: var(--label-2); cursor: pointer;
   font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: background 160ms ease, box-shadow 160ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background 160ms ease, box-shadow 160ms ease, transform 160ms var(--dt-ease-out);
 }
 .segmented button:active { transform: scale(0.97); transition-duration: 70ms; }
 .segmented button:hover { color: var(--label); }
@@ -263,7 +275,7 @@ input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 20px; height: 20px; margin-top: -8px; border-radius: 50%;
   background: var(--knob); box-shadow: var(--shadow-knob);
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 160ms var(--dt-ease-out);
 }
 input[type='range']:active::-webkit-slider-thumb { transform: scale(1.12); transition-duration: 80ms; }
 input[type='range']:focus-visible { outline-offset: 3px; border-radius: 6px; }
@@ -283,9 +295,9 @@ input[type='range']:focus-visible { outline-offset: 3px; border-radius: 6px; }
 .slider input { grid-area: range; }
 .slider em { grid-area: value; font-style: normal; text-align: right; font-size: 12.5px; color: var(--label-2); font-variant-numeric: tabular-nums; }
 .slider + .slider::before { content: ''; position: absolute; left: 14px; right: 0; top: 0; height: 0.5px; background: var(--sep); }
-.slider-group + .slider, .fx-knobs > .slider:first-child { border-radius: 10px 10px 0 0; }
+.slider-group + .slider, .fx-knobs > .slider:first-child { border-radius: var(--dt-radius-control) var(--dt-radius-control) 0 0; }
 .slider:has(+ .slider-group), .slider:last-child { border-radius: 0 0 10px 10px; }
-.slider-group + .slider:has(+ .slider-group), .slider-group + .slider:last-child { border-radius: 10px; }
+.slider-group + .slider:has(+ .slider-group), .slider-group + .slider:last-child { border-radius: var(--dt-radius-control); }
 
 /* ───────── The equalizer ─────────
  * Every setting of the voice is a band. The inputs are ordinary range sliders turned upright, so
@@ -296,8 +308,8 @@ input[type='range']:focus-visible { outline-offset: 3px; border-radius: 6px; }
 .eq-head em { font-style: normal; font-size: 15px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
 .eq-head small { grid-column: 1 / -1; font-size: 12px; color: var(--label-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .eq-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
-.eq-tabs { width: 360px; max-width: 100%; padding: 3px; border-radius: 12px; }
-.eq-tabs button { height: 26px; border-radius: 9px; }
+.eq-tabs { width: 360px; max-width: 100%; padding: 3px; border-radius: calc(var(--dt-radius-tip) + 3px); }
+.eq-tabs button { height: 26px; border-radius: var(--dt-radius-tip); }
 .eq-tools .link[hidden] { display: none; }
 .eq-bank[hidden] { display: none; }
 .eq-bank.simple .band b { font-size: 13px; font-weight: 600; color: var(--label); }
@@ -337,28 +349,28 @@ input[type='range']:focus-visible { outline-offset: 3px; border-radius: 6px; }
 .switch b { display: block; font-weight: 400; }
 .switch small { display: block; font-size: 11.5px; line-height: 1.3; color: var(--label-3); letter-spacing: 0.005em; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
-.switch i { flex: none; position: relative; width: 40px; height: 24px; border-radius: 12px; background: var(--fill-2); transition: background 200ms ease; }
+.switch i { flex: none; position: relative; width: 46px; height: 28px; border-radius: 14px; background: var(--fill-2); transition: background var(--dt-dur-base) ease-in-out; }
 .switch i::after {
-  content: ''; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%;
+  content: ''; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 50%;
   background: var(--knob); box-shadow: var(--shadow-knob);
-  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), width 160ms ease;
+  transition: transform 240ms var(--dt-ease-out), width 160ms ease;
 }
-.switch:active i::after { width: 24px; }
+.switch:active i::after { width: 28px; }
 .switch input:checked + i { background: var(--green); }
-.switch input:checked + i::after { transform: translateX(16px); }
-.switch:active input:checked + i::after { transform: translateX(12px); }
+.switch input:checked + i::after { transform: translateX(18px); }
+.switch:active input:checked + i::after { transform: translateX(14px); }
 .switch input:focus-visible + i { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 1px; }
 .switch:has(input:disabled) { opacity: 0.45; pointer-events: none; }
 
 .toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 14px; }
-.toggles .switch { padding: 13px 18px; align-items: center; }
+.toggles .switch { padding: 13px 14px; align-items: center; }
 .toggles .switch + .switch::before { left: 0; right: auto; top: 0; bottom: 0; width: 1px; height: auto; }
 .toggles .switch b { font-weight: 500; }
 
 /* Pop-up button */
 select {
   -webkit-appearance: none; appearance: none;
-  height: 30px; max-width: 100%; padding: 0 30px 0 12px; border: 1px solid var(--edge); border-radius: 9px; cursor: pointer;
+  height: 30px; max-width: 100%; padding: 0 30px 0 12px; border: 1px solid var(--edge); border-radius: var(--dt-radius-tip); cursor: pointer;
   background: var(--fill) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M5.6 7.4L9 4.3l3.4 3.1M5.6 10.6L9 13.7l3.4-3.1' fill='none' stroke='%23fff' stroke-opacity='.6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 6px center / 18px;
   font-size: 13px; text-overflow: ellipsis;
 }
@@ -368,7 +380,7 @@ select option { background: #1c1c22; color: #fff; }
 
 /* Search field */
 .search {
-  display: block; width: 100%; height: 34px; margin-bottom: 10px; padding: 0 12px 0 32px; border: 1px solid var(--edge); border-radius: 12px; outline-offset: 0;
+  display: block; width: 100%; height: 34px; margin-bottom: 10px; padding: 0 12px 0 32px; border: 1px solid var(--edge); border-radius: var(--dt-radius-control); outline-offset: 0;
   background: var(--fill) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='7' cy='7' r='4.6' fill='none' stroke='%238e8e93' stroke-width='1.6'/%3E%3Cpath d='M10.6 10.6L14 14' stroke='%238e8e93' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat left 9px center / 15px;
   font-size: 13px;
 }
@@ -385,7 +397,7 @@ select option { background: #1c1c22; color: #fff; }
 .field.gain input { flex: 0 1 300px; }
 .field.key { flex-wrap: wrap; row-gap: 2px; }
 .hotkey {
-  flex: 0 1 300px; min-width: 0; height: 30px; padding: 0 12px; border: 1px solid var(--edge); border-radius: 9px; cursor: pointer;
+  flex: 0 1 300px; min-width: 0; height: 30px; padding: 0 12px; border: 1px solid var(--edge); border-radius: var(--dt-radius-tip); cursor: pointer;
   background: var(--fill); font-size: 13px; text-align: left; font-variant-numeric: tabular-nums;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background 120ms ease;
 }
@@ -411,12 +423,12 @@ select option { background: #1c1c22; color: #fff; }
 .voice {
   position: relative; display: flex; align-items: center; gap: 11px; min-height: 56px; padding: 9px 12px; text-align: left;
   border-radius: 16px; cursor: pointer;
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+  transition: transform 160ms var(--dt-ease-out), background 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
 .voice:hover { background: rgba(255, 255, 255, 0.09); }
 .voice:active { transform: scale(0.97); transition-duration: 70ms; }
 /* An iOS-style glyph: white symbol on a coloured rounded square. */
-.voice-icon { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: linear-gradient(160deg, color-mix(in srgb, var(--c, #8e8e93) 82%, #fff), var(--c, #8e8e93)); box-shadow: 0 4px 14px color-mix(in srgb, var(--c, #8e8e93) 45%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.3); }
+.voice-icon { flex: none; width: 34px; height: 34px; border-radius: var(--dt-radius-control); display: grid; place-items: center; background: linear-gradient(160deg, color-mix(in srgb, var(--c, #8e8e93) 82%, #fff), var(--c, #8e8e93)); box-shadow: 0 4px 14px color-mix(in srgb, var(--c, #8e8e93) 45%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.3); }
 .voice-icon svg { width: 19px; height: 19px; fill: none; stroke: #fff; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .voice-text { min-width: 0; }
 .voice b { display: block; font-weight: 500; }
@@ -443,9 +455,9 @@ kbd.failed { background: var(--red); color: #fff; }
 .pads::-webkit-scrollbar-thumb { background: var(--fill-2); border: 2px solid transparent; border-radius: 4px; background-clip: padding-box; }
 .pad {
   position: relative; height: 54px; padding: 6px 10px 6px 14px; display: flex; align-items: center; justify-content: center;
-  border-radius: 14px; cursor: pointer; box-shadow: none; backdrop-filter: none;
+  border-radius: var(--dt-radius-row); cursor: pointer; box-shadow: none; backdrop-filter: none;
   font-size: 13px; font-weight: 500; line-height: 1.25; text-align: center; overflow: hidden;
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease;
+  transition: transform 160ms var(--dt-ease-out), background 160ms ease;
 }
 /* Each sound keeps a colour of its own, as a thin marker rather than a painted tile. */
 .pad { background: linear-gradient(100deg, hsl(var(--h, 220) 80% 55% / 0.2), rgba(255, 255, 255, 0.05) 70%); }
@@ -469,7 +481,7 @@ kbd.failed { background: var(--red); color: #fff; }
 .catalog-row + .catalog-row::before { content: ''; position: absolute; left: 50px; right: 0; top: 0; height: 0.5px; background: var(--sep); }
 .catalog-play {
   width: 28px; height: 28px; border-radius: 50%; border: 0; cursor: pointer; background: var(--fill); color: var(--accent); font-size: 10px; line-height: 1;
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 120ms ease;
+  transition: transform 160ms var(--dt-ease-out), background 120ms ease;
 }
 .catalog-play:hover { background: var(--fill-2); }
 .catalog-play:active { transform: scale(0.9); transition-duration: 70ms; }
@@ -484,7 +496,7 @@ kbd.failed { background: var(--red); color: #fff; }
 .ai-voice input { accent-color: var(--accent-solid); }
 .ai-voice b { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-voice small { font-size: 12px; color: var(--label-3); }
-.ai-speaker { width: 68px; height: 28px; padding: 0 8px; border: 1px solid var(--edge); border-radius: 8px; background: var(--fill); font-variant-numeric: tabular-nums; }
+.ai-speaker { width: 68px; height: 28px; padding: 0 8px; border: 1px solid var(--edge); border-radius: var(--dt-radius-tip); background: var(--fill); font-variant-numeric: tabular-nums; }
 .ai-voice + .ai-live { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
 .ai-empty { border-top: 0.5px solid var(--sep); }
 .ai-live { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
@@ -529,15 +541,15 @@ kbd.failed { background: var(--red); color: #fff; }
 /* ───────── Menu (right-click on a sound) ───────── */
 .menu {
   position: fixed; z-index: 20; width: 280px; padding: 5px; display: flex; flex-direction: column; gap: 1px;
-  background: var(--menu); border: 1px solid var(--edge); border-top-color: var(--edge-top); border-radius: 14px; backdrop-filter: blur(30px) saturate(180%);
+  background: var(--menu); border: 1px solid var(--edge); border-top-color: var(--edge-top); border-radius: var(--dt-radius-row); backdrop-filter: blur(30px) saturate(180%);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
-  animation: menu-in 140ms cubic-bezier(0.22, 1, 0.36, 1); transform-origin: top left;
+  animation: menu-in 140ms var(--dt-ease-out); transform-origin: top left;
 }
 @keyframes menu-in { from { opacity: 0; transform: scale(0.96); } }
 @keyframes menu-fade { from { opacity: 0; } }
 .menu input { height: 28px; margin: 3px 3px 5px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--fill); outline: none; }
 .menu input:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
-.menu button { min-height: 28px; padding: 4px 10px; border: 0; border-radius: 8px; background: none; font-size: 13px; text-align: left; cursor: pointer; }
+.menu button { min-height: 28px; padding: 4px 10px; border: 0; border-radius: var(--dt-radius-tip); background: none; font-size: 13px; text-align: left; cursor: pointer; }
 .menu button:hover, .menu button:focus-visible { background: var(--accent-solid); color: #fff; outline: none; }
 .menu button.danger { color: var(--red); }
 .menu button.danger:hover, .menu button.danger:focus-visible { background: var(--red); color: #fff; }
@@ -563,6 +575,8 @@ kbd.failed { background: var(--red); color: #fff; }
 }
 
 /* ───────── System accessibility settings ───────── */
+/* The same when "less motion" is switched on for the whole ecosystem in core.txt. */
+:root[data-reduced-motion], :root[data-reduced-motion] *, :root[data-reduced-motion] *::before, :root[data-reduced-motion] *::after { transition-duration: 1ms !important; animation-duration: 1ms !important; }
 @media (prefers-reduced-motion: reduce) {
   :root, *, *::before, *::after, input[type='range']::-webkit-slider-thumb { transition-duration: 1ms !important; }
   .intro-fish, .intro-fish i, .intro-name { animation: none; opacity: 1; transform: none; }
@@ -585,3 +599,58 @@ kbd.failed { background: var(--red); color: #fff; }
   .bar, .bar i, .switch i, .switch i::after, .voice-icon, .pad::before { forced-color-adjust: none; }
   .tabs button[aria-selected='true'], .segmented button[aria-checked='true'], .voice[aria-checked='true'] { outline: 2px solid Highlight; outline-offset: -2px; }
 }
+
+/* имя продукта: подпись .txt приглушена, как во всех приложениях dev.txt */
+.intro-name span { color: var(--label-2); }
+
+/* ───────── Windows 11 ─────────
+ * Like the other dev.txt apps: Mica behind the window, Windows 11 switches and buttons,
+ * corners 4 on controls and 8 on panels, text by the Windows type ramp. The character's colour stays. */
+body { font-size: 14px; }
+html.mica, html.mica body { background: transparent; }
+html.mica .backdrop { opacity: 0.25; }
+html.mica body.on .backdrop { opacity: 0.6; }
+
+/* Buttons: 4 px corners, a flat fill with a thin stroke, no jumping when pressed */
+.pill { border-radius: var(--dt-radius-control); font-size: 14px; font-weight: 400; border-top-color: var(--edge); transition: background 83ms linear, opacity 167ms linear; }
+.pill.small { border-radius: var(--dt-radius-control); font-size: 12px; }
+.pill:active, .pill.held { transform: none; opacity: 0.8; }
+.pill.prominent, .pill.live, .pill.held { box-shadow: none; }
+.pill.prominent:hover, .pill.live:hover { filter: none; background: color-mix(in srgb, var(--accent-solid) 90%, transparent); }
+
+/* Switch: 40×20, an empty outlined track with a grey knob; on — the accent fill and a white knob */
+.switch small { font-size: 12px; }
+.switch i { width: 40px; height: 20px; border-radius: 10px; background: rgb(255 255 255 / 0.06); box-shadow: inset 0 0 0 1px var(--label-2); transition: background 83ms linear; }
+.switch i::after {
+  top: 4px; left: 4px; width: 12px; height: 12px; background: var(--label-2); box-shadow: none;
+  transition: transform 167ms cubic-bezier(0, 0, 0, 1), width 167ms cubic-bezier(0, 0, 0, 1), height 167ms cubic-bezier(0, 0, 0, 1), top 167ms cubic-bezier(0, 0, 0, 1), left 167ms cubic-bezier(0, 0, 0, 1);
+}
+.switch:hover i::after { top: 3px; left: 3px; width: 14px; height: 14px; }
+.switch:active i::after { width: 17px; }
+.switch input:checked + i { background: var(--accent-solid); box-shadow: none; }
+.switch input:checked + i::after { background: #fff; transform: translateX(20px); }
+.switch:hover input:checked + i::after { transform: translateX(19px); }
+.switch:active input:checked + i::after { transform: translateX(16px); }
+.switch input:focus-visible + i, :focus-visible { outline: 2px solid var(--label); outline-offset: 2px; }
+
+/* ───────── One family with the other dev.txt windows (kit.txt, NavShell) ─────────
+ * Sections on the left: 38 high, plain icon and label, the selected one — a soft fill and the orange
+ * dev.txt pill on the left. Page title 28 semibold, as in core.txt, metla.txt and kapsula.txt. */
+.tabs button { height: 38px; padding: 0 12px 0 14px; gap: 14px; border: 0; font-size: 14px; font-weight: 400; color: var(--label); transition: background 83ms linear; }
+.tabs svg { width: 18px; height: 18px; stroke: var(--label); }
+.tabs button:hover { background: rgb(255 255 255 / 0.06); }
+.tabs button[aria-selected='true'] { background: rgb(255 255 255 / 0.08); border: 0; box-shadow: none; color: var(--label); }
+.tabs button[aria-selected='true']::before {
+  content: ''; position: absolute; left: 0; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 1.5px;
+  background: var(--dt-brand); animation: tab-pill 250ms cubic-bezier(0, 0, 0, 1);
+}
+@keyframes tab-pill { from { transform: scaleY(0.4); opacity: 0; } to { transform: none; opacity: 1; } }
+h2 { font-size: 28px; font-weight: 600; }
+/* Switches are the same in every dev.txt app: orange track, dark knob */
+.switch input:checked + i { background: var(--dt-brand); }
+.switch input:checked + i::after { background: rgb(0 0 0 / 0.894); }
+/* Sliders are the same in every dev.txt app: orange fill, a dark disc with an orange dot (Windows 11 thumb) */
+input[type='range']::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--dt-brand) var(--p), rgb(255 255 255 / 0.544) var(--p)); }
+input[type='range']::-webkit-slider-thumb { background: radial-gradient(circle, var(--dt-brand) 0 5px, #454545 6px); box-shadow: 0 0 0 1px rgb(255 255 255 / 0.09); }
+input[type='range']:hover::-webkit-slider-thumb { background: radial-gradient(circle, var(--dt-brand) 0 6px, #454545 7px); }
+input[type='range']:active::-webkit-slider-thumb { transform: none; background: radial-gradient(circle, var(--dt-brand) 0 4px, #454545 5px); }

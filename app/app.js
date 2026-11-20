@@ -3,6 +3,8 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const TEST = new URLSearchParams(location.search).has('test');
 const PROBE = new URLSearchParams(location.search).has('probe');
 const DATA = new URLSearchParams(location.search).get('data'); // dev only: worst-case fixtures, see dev-fixtures.js
+// Windows 11 draws Mica behind the window: the page leaves its own background off (see «Windows 11» in style.css)
+if (new URLSearchParams(location.search).has('mica')) document.documentElement.classList.add('mica');
 let fixture = null;
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -307,14 +309,14 @@ function renderSystem() {
   let title, text, action;
   if (sys.outdated && !sys.detached) {
     title = 'Модуль в микрофоне нужно обновить';
-    text = 'Aura обновилась, а в микрофоне ещё работает прежний модуль. Windows спросит права администратора, звук прервётся на пару секунд.';
+    text = 'aura.txt обновилась, а в микрофоне ещё работает прежний модуль. Windows спросит права администратора, звук прервётся на пару секунд.';
     action = 'Обновить модуль';
   } else if (sys.detached) {
     title = 'Windows отключила модуль';
     text = 'Так бывает после обновления Windows или драйвера микрофона. Встройте модуль заново — настройки сохранятся.';
     action = 'Встроить заново';
   } else if (!sys.installed) {
-    title = 'Встроить Aura в микрофон';
+    title = 'Встроить aura.txt в микрофон';
     text = 'Обработанный голос услышат все программы — без виртуального кабеля. Windows спросит права администратора, звук в системе прервётся на пару секунд.';
     action = 'Встроить';
   } else if (silent) {
@@ -322,7 +324,7 @@ function renderSystem() {
     text = 'Пока модуль в таком состоянии, микрофон может не работать и в других программах. «Убрать» вернёт микрофон как был; после этого модуль можно встроить заново.';
     action = 'Убрать';
   } else {
-    title = 'Aura встроена в микрофон';
+    title = 'aura.txt встроена в микрофон';
     text = sys.alive ? 'Модуль работает. Голос остаётся обработанным, даже когда это окно закрыто.' : 'Включите сферу, чтобы проверить, что модуль работает.';
     action = 'Убрать';
   }
@@ -449,8 +451,123 @@ async function setPower(on) {
   renderPower();
   renderSystem();
 }
+/* ───────── core.txt: the shared settings page ─────────
+ * The dev.txt launcher shows the everyday settings of every app on one page. Aura describes its
+ * own to the launcher's hub and takes changes back (kit.txt, hub/PROTOCOL.md, "Настройки
+ * приложения"). Labels and values are read from this window's own controls, and a change is made
+ * by operating the same control — so the launcher and the window can never disagree. */
+const HUB_SWITCHES = ['auto', 'monitor', 'dehum', 'autostart', 'autoUpdate'];
+const HUB_SELECTS = ['nsEngine', 'loudTarget'];
+// section — общая страница core.txt, где показать пункт вместо страницы aura.txt («startup» — «Запуск и обновления»)
+const hubSwitch = (id, section) => {
+  const el = $('#' + id);
+  const label = el?.closest('label');
+  if (!el || !label || el.disabled) return null;
+  const item = { key: id, type: 'switch', label: label.querySelector('b')?.textContent || id, hint: label.querySelector('small')?.textContent || '', value: el.checked };
+  if (section) item.section = section;
+  return item;
+};
+const hubSelect = (id) => {
+  const el = $('#' + id);
+  if (!el || el.disabled || !el.options.length) return null;
+  const short = (text) => text.split(' — ')[0].trim(); // "Обычный — RNNoise, 10 мс" → "Обычный"
+  return {
+    key: id, type: 'choice', label: el.closest('label')?.querySelector('span')?.textContent || id, value: el.value,
+    options: [...el.options].map((o) => ({ value: o.value, label: short(o.textContent) })),
+  };
+};
+function hubSettingsNow() {
+  const only = (items) => items.filter(Boolean);
+  return {
+    groups: [
+      { title: '', items: only([
+        { key: 'power', type: 'switch', label: 'Обработка голоса', hint: 'Включает и выключает aura.txt', value: engine.running },
+        { key: 'preset', type: 'choice', label: 'Готовый звук', value: state.preset, options: Object.entries(PRESETS).map(([id, p]) => ({ value: id, label: p.name })) },
+        sys.installed ? { key: 'mute', type: 'switch', label: 'Заглушить микрофон', hint: 'Тишина для всех программ', value: !!state.mute } : null,
+        hubSwitch('auto'),
+        hubSwitch('monitor'),
+      ]) },
+      { title: 'Звук', items: only([hubSelect('nsEngine'), hubSelect('loudTarget'), hubSwitch('dehum')]) },
+      { title: 'Запуск и обновления', items: only([hubSwitch('autostart', 'startup'), hubSwitch('autoUpdate', 'startup')]) },
+    ],
+  };
+}
+let hubTimer = 0;
+let hubLast = '';
+// Debounced, and sent only when something really changed
+function publishHubSettings() {
+  if (!window.auraSystem?.hubSettings || TEST || PROBE || DATA) return;
+  clearTimeout(hubTimer);
+  hubTimer = setTimeout(() => {
+    const now = hubSettingsNow();
+    const text = JSON.stringify(now);
+    if (text === hubLast) return;
+    hubLast = text;
+    window.auraSystem.hubSettings(now);
+  }, 120);
+}
+async function applyHubSetting(key, value) {
+  if (key === 'power') return setPower(!!value);
+  if (key === 'preset') {
+    if (!PRESETS[value]) throw new Error('такого звука нет');
+    return selectPreset(value);
+  }
+  if (key === 'mute') {
+    if (!sys.installed) throw new Error('aura.txt не встроена в микрофон');
+    $('#mute').checked = state.mute = !!value;
+    save();
+    pushSystem();
+    return reportToTray();
+  }
+  const el = HUB_SWITCHES.includes(key) || HUB_SELECTS.includes(key) ? $('#' + key) : null;
+  if (!el || el.disabled) throw new Error('такой настройки нет');
+  if (el.type === 'checkbox') el.checked = !!value;
+  else {
+    if (![...el.options].some((o) => o.value === String(value))) throw new Error('такого варианта нет');
+    el.value = String(value);
+  }
+  el.dispatchEvent(new Event('change', { bubbles: true })); // the control's own handler does the rest
+}
+// The shared look: one accent colour for every dev.txt app (or Aura's own, by the character), and
+// "less motion" switched on for the whole ecosystem.
+function applyHubTheme(theme) {
+  const root = document.documentElement;
+  const accent = theme && /^#[0-9a-f]{6}$/i.test(theme.accent || '') ? theme.accent : null;
+  const vars = [
+    ['--accent', accent],
+    ['--accent-solid', accent && 'color-mix(in srgb, ' + accent + ', black 12%)'],
+    ['--accent-tint', accent && 'color-mix(in srgb, ' + accent + ' 22%, transparent)'],
+  ];
+  for (const [name, value] of vars) {
+    if (value) root.style.setProperty(name, value); else root.style.removeProperty(name);
+  }
+  root.toggleAttribute('data-reduced-motion', !!theme?.reducedMotion);
+}
+function startHubSettings() {
+  const bridge = window.auraSystem;
+  if (!bridge?.onHubCommand) return;
+  bridge.onHubCommand(async (id, kind, key, value) => {
+    try {
+      if (kind !== 'set') throw new Error('такой команды нет');
+      await applyHubSetting(key, value);
+      bridge.hubResult(id, true);
+    } catch (e) {
+      bridge.hubResult(id, false, String(e?.message || e));
+    }
+    hubLast = ''; // answer with the full picture even if nothing changed: the launcher is waiting for it
+    publishHubSettings();
+  });
+  bridge.onHubTheme(applyHubTheme);
+  bridge.hubTheme().then(applyHubTheme, () => {});
+  // Anything changed in this window by hand reaches the launcher too
+  document.addEventListener('change', publishHubSettings);
+  setInterval(publishHubSettings, 3000); // and what changes without a click: the module appearing, a select being filled
+  publishHubSettings();
+}
+
 // Keep the tray icon and its menu in step with the window.
 function reportToTray() {
+  publishHubSettings();
   window.auraSystem?.report({
     mute: state.mute && sys.installed,
     system: sys.installed,
@@ -524,7 +641,7 @@ $('#presetSave').addEventListener('click', async () => {
 $('#presetLoad').addEventListener('click', async () => {
   const data = await window.auraSystem.importPreset();
   if (!data) return;
-  if (data.error) return flash('Это не файл пресета Aura', true);
+  if (data.error) return flash('Это не файл пресета aura.txt', true);
   // Only the sound travels in a file; room settings (noise, echo, gate) stay yours.
   const v = {};
   const eq = {};
@@ -789,7 +906,7 @@ function renderRoute() {
   const el = $('#route');
   if (sys.installed) {
     el.classList.remove('warn');
-    el.textContent = 'Aura встроена в микрофон: в Discord, OBS и играх ничего переключать не нужно, выбирайте свой обычный микрофон.';
+    el.textContent = 'aura.txt встроена в микрофон: в Discord, OBS и играх ничего переключать не нужно, выбирайте свой обычный микрофон.';
     return;
   }
   const out = devices.find((d) => d.kind === 'audiooutput' && d.deviceId === state.outputId);
@@ -1567,7 +1684,8 @@ addEventListener(
 
 async function syncHotkeys() {
   if (!window.auraSystem?.setHotkeys || TEST) return;
-  const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null), voices: Object.entries(state.fxKeys) });
+  // padNames — для страницы «Клавиши» в core.txt: там у звука видно его название
+  const failed = await window.auraSystem.setHotkeys({ power: state.hotkeys.power, mute: state.hotkeys.mute, pads: state.pads.map((p) => p.key || null), padNames: state.pads.map((p) => p.name), voices: Object.entries(state.fxKeys) });
   const next = new Set(fixture ? fixture.failedHotkeys : failed || []);
   const changed = next.size !== hotkeyFailed.size || [...next].some((accel) => !hotkeyFailed.has(accel));
   hotkeyFailed = next;
@@ -1807,6 +1925,21 @@ function showTab(name) {
   }
 }
 for (const b of tabButtons) b.addEventListener('click', () => showTab(b.dataset.tab));
+// core.txt просит открыть страницу (show с page). Своё место здесь есть только у горячих клавиш — внизу «Настроек».
+function openPage(page) {
+  if (page !== 'keys') return;
+  showTab('setup');
+  const title = $('#keysTitle');
+  const calm = REDUCED_MOTION || document.documentElement.hasAttribute('data-reduced-motion');
+  requestAnimationFrame(() => title.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' }));
+  // Список микрофонов выше мог дорисоваться и сдвинуть раздел, а плавная прокрутка — не дойти: тогда сразу на место
+  setTimeout(() => {
+    const page = title.parentElement.getBoundingClientRect();
+    const top = Math.max(page.top, 0), bottom = Math.min(page.bottom, innerHeight);
+    const keys = (title.nextElementSibling || title).getBoundingClientRect();
+    if (title.getBoundingClientRect().top < top || keys.bottom > bottom) title.scrollIntoView({ block: 'start' });
+  }, 900);
+}
 for (const group of [$('#tabs'), presetsEl]) {
   group.addEventListener('keydown', (e) => {
     const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
@@ -2481,7 +2614,7 @@ async function renderAi() {
           row.append(pick, name, kind, del);
           return row;
         })
-      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Свои голоса: файл модели RVC второго поколения — .pth (как их обычно выкладывают; Aura сама переведёт его в нужный вид, не запуская ничего из файла) или .onnx. Файл .index не нужен.' })])
+      : [Object.assign(document.createElement('p'), { className: 'ai-empty', textContent: 'Свои голоса: файл модели RVC второго поколения — .pth (как их обычно выкладывают; aura.txt сама переведёт его в нужный вид, не запуская ничего из файла) или .onnx. Файл .index не нужен.' })])
   );
   for (const id of ['aiTry', 'aiFile']) $('#' + id).disabled = aiBusy || !s.encoder || !state.aiVoice;
   $('#aiLive').disabled = (!s.encoder || !state.aiVoice) && !aiLiveOn;
@@ -2860,7 +2993,18 @@ $('#partyForget').addEventListener('click', async (e) => {
 applyPartySwitch();
 
 /* ───────── Start with Windows ───────── */
-window.auraSystem?.getAutostart?.().then((on) => ($('#autostart').checked = !!on));
+// Переключить можно и в меню значка: тогда main.js присылает «autostart», и галочка здесь, и пункт в core.txt
+// («Общие» → «Запуск и обновления») берут настоящее состояние, а не то, что было при открытии окна
+function readAutostart(publish) {
+  window.auraSystem?.getAutostart?.().then((on) => {
+    $('#autostart').checked = !!on;
+    if (publish) publishHubSettings();
+  }, () => {});
+}
+readAutostart(false);
+window.auraSystem?.onCommand?.((name) => {
+  if (name === 'autostart') readAutostart(true);
+});
 $('#autostart').addEventListener('change', async (e) => {
   e.target.checked = !!(await window.auraSystem.setAutostart(e.target.checked));
 });
@@ -3131,12 +3275,14 @@ async function boot() {
   await loadCaptureDevices(); // the microphone's name picks its profile
   checkUpdate();
   setInterval(pollSystem, 2000);
+  startHubSettings();
   window.auraSystem?.onCommand((name, arg) => {
     if (name === 'visible') setWindowVisible(!!arg);
     if (name === 'power') setPower(!engine.running);
     if (name === 'preset') selectPreset(arg);
     if (name === 'voice') selectVoice(arg === state.fx ? 'none' : arg); // the same key again switches it off
     if (name === 'pad' && state.pads[arg]) playPad(state.pads[arg]);
+    if (name === 'page') openPage(arg);
     if (name === 'mute' && sys.installed) {
       $('#mute').checked = state.mute = !state.mute;
       save();
@@ -3160,3 +3306,44 @@ async function boot() {
   }
 }
 boot();
+
+/* ───── Запуск, обновления и дорога к core.txt ─────
+ * Своя группа внизу «Настроек». Без core.txt — переключатели запуска и обновлений и тихая строка «Скачать core.txt».
+ * Когда core.txt установлен, запуск вместе с Windows и обновления настраиваются в нём (пункты с section: "startup"
+ * в aura.settings): их строки здесь прячутся, вместо них — «Настраивается в core.txt» с кнопкой на его страницу
+ * «Общие». Ключи и значения те же — меняется только место, где их видно. Пока значок aura.txt у core.txt, своего
+ * меню с «Выход» нет, а в меню core.txt выхода для приложений нет: тогда здесь же строка «Выйти из aura.txt». */
+(function startupGroup() {
+  const row = document.getElementById('coreRow'), btn = document.getElementById('coreBtn'), title = document.getElementById('coreTitle'), hint = document.getElementById('coreHint');
+  const quitRow = document.getElementById('quitRow'), quitBtn = document.getElementById('quitBtn');
+  const sys = window.auraSystem;
+  if (!row || !btn || !title || !sys?.coreInfo) return;
+  const startupRows = ['autostart', 'autoUpdate'].map((id) => document.getElementById(id)?.closest('label')).filter(Boolean);
+  let installed = false;
+  async function paint() {
+    const info = await sys.coreInfo().catch(() => null);
+    if (!info) return;
+    installed = !!info.installed;
+    const here = info.online || installed;
+    for (const r of startupRows) r.hidden = installed;
+    title.textContent = installed ? 'Настраивается в core.txt' : 'core.txt — лаунчер dev.txt';
+    btn.textContent = here ? 'Открыть core.txt' : 'Скачать core.txt';
+    btn.classList.toggle('prominent', !here);
+    hint.textContent = installed
+      ? 'На странице «Общие», рядом с остальными приложениями dev.txt'
+      : here
+        ? 'Обновления, общие настройки и остальные приложения dev.txt — в одном окне'
+        : 'Все приложения dev.txt в одном окне: установка, обновления и общие настройки. aura.txt работает и без него';
+    row.hidden = false;
+    if (quitRow) quitRow.hidden = !info.quitHere || !sys.quit;
+  }
+  // Установлен — сразу на «Общие» (core.txt запущен — просьбой через хаб, нет — запуском с этой страницей), нет — скачать
+  btn.addEventListener('click', async () => { await sys.coreGo(installed ? 'general' : undefined).catch(() => {}); setTimeout(paint, 1500); });
+  quitBtn?.addEventListener('click', () => sys.quit?.());
+  // Значок ушёл к core.txt или вернулся, core.txt появился или пропал — main.js присылает «family»
+  sys.onCommand?.((name) => {
+    if (name === 'family') paint();
+  });
+  window.addEventListener('focus', paint);
+  paint();
+})();

@@ -1,12 +1,14 @@
 {
   "name": "aura-voice",
   "productName": "Aura",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "Студийная обработка голоса с микрофона в реальном времени",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "icons": "node scripts/make-icon.js",
+    "test:family": "node scripts/family-test.js",
+    "test:main": "node scripts/main-test.js",
     "dist": "electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
@@ -21,6 +23,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "hub-client.js",
+      "family.js",
       "ai-convert.js",
       "ai-worker.js",
       "party-mix.js",

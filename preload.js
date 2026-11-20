@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('auraSystem', {
   catalogSound: (item) => ipcRenderer.invoke('uwu:sound', item),
   catalogAdd: (item) => ipcRenderer.invoke('uwu:add', item),
   openCatalogSite: () => ipcRenderer.invoke('uwu:open'),
+  coreInfo: () => ipcRenderer.invoke('core:info'),
+  coreGo: (page) => ipcRenderer.invoke('core:go', page), // page — страница core.txt, например «general»
+  quit: () => ipcRenderer.invoke('app:quit'), // выйти совсем: пока значок у core.txt, своего меню с «Выход» нет
   exportPreset: (preset) => ipcRenderer.invoke('preset:export', preset),
   aiStatus: () => ipcRenderer.invoke('ai:status'),
   aiDownload: () => ipcRenderer.invoke('ai:download'),
@@ -62,4 +65,10 @@ contextBridge.exposeInMainWorld('auraSystem', {
   // Tray menu <-> window
   report: (state) => ipcRenderer.send('ui:state', state),
   onCommand: (handler) => ipcRenderer.on('tray:command', (_e, name, arg) => handler(name, arg)),
+  // core.txt hub <-> window: the settings shown on the launcher's shared page, and the shared look
+  hubSettings: (settings) => ipcRenderer.send('hub:settings', settings),
+  onHubCommand: (handler) => ipcRenderer.on('hub:command', (_e, id, kind, key, value) => handler(id, kind, key, value)),
+  hubResult: (id, ok, error) => ipcRenderer.send('hub:result', id, ok, error),
+  hubTheme: () => ipcRenderer.invoke('hub:theme'),
+  onHubTheme: (handler) => ipcRenderer.on('hub:theme', (_e, theme) => handler(theme)),
 });
