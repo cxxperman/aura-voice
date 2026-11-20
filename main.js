@@ -667,6 +667,105 @@ ipcMain.handle('ai:convert', async (_e, pcm, id, st, speaker) => {
   return res.ok ? { pcm: res.pcm } : { error: res.error || 'Не получилось.' };
 });
 
+/* ───── Party ─────
+ * Talking to someone together: a site (any site) runs in a window of its own, its sound can be
+ * taken by the Aura window — to be passed on to friends — and what friends say is added to the
+ * microphone by the module (party-mix.js). The page in the party window is never touched:
+ * nothing is injected into it, nothing about the browser is disguised. It has a profile of its
+ * own, apart from Aura's, and the one thing it may be granted is the microphone, asked per site. */
+const { Mix } = require('./party-mix.js');
+let partyWin = null;
+let partyMix = null;
+const partyMicAllowed = new Set(); // origins the user said yes to, this run only
+const partySession = () => session.fromPartition('persist:party');
+const originOf = (url) => {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' ? u.origin : '';
+  } catch {
+    return '';
+  }
+};
+function partyPermissions() {
+  const ses = partySession();
+  ses.setPermissionRequestHandler(async (wc, permission, done, details) => {
+    const origin = originOf(details.requestingUrl || wc.getURL());
+    if (permission !== 'media' || !origin || (details.mediaTypes || []).includes('video')) return done(false);
+    if (partyMicAllowed.has(origin)) return done(true);
+    const { response } = await dialog.showMessageBox(partyWin || win, {
+      type: 'question', buttons: ['Разрешить', 'Отказать'], defaultId: 0, cancelId: 1,
+      message: `Разрешить микрофон сайту ${new URL(origin).host}?`,
+      detail: 'Сайт будет слышать ваш микрофон со всем, что Aura к нему добавляет. Разрешение действует до закрытия Aura.',
+    });
+    if (response === 0) partyMicAllowed.add(origin);
+    done(response === 0);
+  });
+  ses.setPermissionCheckHandler((_wc, permission, origin) => permission === 'media' && partyMicAllowed.has(originOf(origin)));
+}
+ipcMain.handle('party:open', (_e, address) => {
+  let url = String(address || '').trim();
+  if (!url) return { error: 'Введите адрес сайта.' };
+  if (!/^[a-z]+:\/\//i.test(url)) url = 'https://' + url;
+  if (!originOf(url)) return { error: 'Нужен адрес сайта с https://' };
+  if (!partyWin || partyWin.isDestroyed()) {
+    partyPermissions();
+    partyWin = new BrowserWindow({
+      width: 1100, height: 820, title: 'Aura — пати', backgroundColor: '#111114', icon: path.join(__dirname, 'assets', 'icon.ico'),
+      webPreferences: { session: partySession(), sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    partyWin.removeMenu();
+    partyWin.webContents.setWindowOpenHandler(({ url: next }) => {
+      if (originOf(next)) partyWin.loadURL(next); // links that want a new window open in this one
+      return { action: 'deny' };
+    });
+    partyWin.on('closed', () => (partyWin = null));
+  }
+  partyWin.loadURL(url);
+  partyWin.show();
+  return { ok: true };
+});
+ipcMain.handle('party:close', () => {
+  if (partyWin && !partyWin.isDestroyed()) partyWin.close();
+  return true;
+});
+ipcMain.handle('party:state', () => (partyWin && !partyWin.isDestroyed() ? { open: true, url: partyWin.webContents.getURL(), title: partyWin.webContents.getTitle().slice(0, 80) } : { open: false }));
+ipcMain.handle('party:forget', async () => { // everything the party window's profile holds: sign-ins, cookies, cache
+  if (partyWin && !partyWin.isDestroyed()) partyWin.close();
+  partyMicAllowed.clear();
+  await partySession().clearStorageData();
+  await partySession().clearCache();
+  return true;
+});
+// Sound for the microphone (friends' voices, mixed, mono 48 kHz float32).
+const partyWrite = (samples) => {
+  try {
+    if (!partyMix) partyMix = new Mix(path.join(dataDir, 'mix.bin'));
+    partyMix.write(samples);
+    return true;
+  } catch {
+    return false;
+  }
+};
+ipcMain.on('party:mix', (_e, pcm) => {
+  if (pcm instanceof ArrayBuffer && pcm.byteLength && pcm.byteLength % 4 === 0 && pcm.byteLength <= 4 * 48000) partyWrite(new Float32Array(pcm));
+});
+// A short two-tone signal into the microphone: proves the path to the module, by ear or by a recording.
+ipcMain.handle('party:beep', () => {
+  let sent = 0;
+  const total = 48000 * 0.8, step = 960;
+  const timer = setInterval(() => {
+    const out = new Float32Array(step);
+    for (let i = 0; i < step; i++) {
+      const n = sent + i, t = n / 48000;
+      const fade = Math.min(1, n / 960, (total - n) / 960);
+      out[i] = 0.2 * Math.max(0, fade) * Math.sin(2 * Math.PI * (t < 0.4 ? 660 : 880) * t);
+    }
+    sent += step;
+    if (!partyWrite(out) || sent >= total) clearInterval(timer);
+  }, 20);
+  return true;
+});
+
 /* ───── Start with Windows ───── */
 ipcMain.handle('autostart:get', () => app.isPackaged && app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin);
 ipcMain.handle('autostart:set', (_e, on) => {
@@ -940,7 +1039,11 @@ app.whenReady().then(() => {
   checkAttached();
   setInterval(checkAttached, 60000);
   if (!devRun) {
-    createTray();
+    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    if (partyWin && !partyWin.isDestroyed()) callback({ video: partyWin.webContents.mainFrame, audio: partyWin.webContents.mainFrame });
+    else callback({});
+  });
+  createTray();
   // Start with Windows, in the tray, unless the user says otherwise. The choice is made once, on
   // the first run of an installed copy; after that the switch in Settings (or the tray) decides.
   const asked = path.join(app.getPath('userData'), 'autostart.set');

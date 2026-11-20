@@ -35,6 +35,7 @@ struct Live {
   std::atomic<bool> mute{false};
   std::atomic<int> nsEngine{0};
   std::atomic<bool> aiLive{false};
+  std::atomic<bool> party{false};
   std::atomic<unsigned> playId{0}, playStop{0};
   std::atomic<float> clipGain{1.0f};
   // DeepFilterNet: 0 = not available, 1 = available, -1 = switched off because loading it crashed last time.
@@ -70,6 +71,7 @@ void store(const aura::Settings& s) {
   gLive.mute.store(s.mute, std::memory_order_relaxed);
   gLive.nsEngine.store(s.nsEngine, std::memory_order_relaxed);
   gLive.aiLive.store(s.aiLive, std::memory_order_relaxed);
+  gLive.party.store(s.party, std::memory_order_relaxed);
   gLive.playId.store(s.playId, std::memory_order_relaxed);
   gLive.playStop.store(s.playStop, std::memory_order_relaxed);
   gLive.clipGain.store(s.clipGain, std::memory_order_relaxed);
@@ -308,6 +310,36 @@ void liveOpen() { // watcher thread only
   CloseHandle(f);
 }
 
+// ───── Party: other people's voices, added to the microphone ─────
+// The same kind of shared file as the live AI voice (mix.bin, magic "AURM"), used one way: the
+// window writes a mono 48 kHz stream into `play` — friends' voices, already mixed — and the module
+// adds it to whatever is leaving the microphone, after all of the user's own processing. Being a
+// sum and not a replacement, it works alongside the AI voice, the soundboard, mute excepted.
+constexpr uint32_t kMixMagic = 0x4d525541; // "AURM"
+std::atomic<LiveShared*> gMixMap{nullptr};
+
+void mixOpen() { // watcher thread only; the view stays for the life of the process, like the live one
+  if (gMixMap.load()) return;
+  const std::wstring path = aura::dataDir() + L"\\mix.bin";
+  const HANDLE f = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (f == INVALID_HANDLE_VALUE) return;
+  LARGE_INTEGER size;
+  if (GetFileSizeEx(f, &size) && size.QuadPart == LONGLONG(sizeof(LiveShared))) {
+    if (const HANDLE m = CreateFileMappingW(f, nullptr, PAGE_READWRITE, 0, 0, nullptr)) {
+      auto* view = static_cast<LiveShared*>(MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LiveShared)));
+      if (view && view->magic == kMixMagic) {
+        VirtualLock(view, sizeof(LiveShared));
+        gMixMap.store(view);
+      } else if (view) {
+        UnmapViewOfFile(view);
+      }
+      CloseHandle(m);
+    }
+  }
+  CloseHandle(f);
+}
+
 DWORD WINAPI watch(void*) {
   const std::wstring settings = aura::dataDir() + L"\\settings.txt";
   const std::wstring status = aura::dataDir() + L"\\status.txt";
@@ -325,6 +357,7 @@ DWORD WINAPI watch(void*) {
     }
     sweepRetiredClips();
     if (tick % 10 == 0 && gLive.aiLive.load()) liveOpen();
+    if (tick % 10 == 0 && gLive.party.load()) mixOpen();
 #ifdef AURA_HAVE_DFN
     if (tick % 50 == 0) {
       deepAllowed(false);
@@ -547,6 +580,7 @@ class AuraApo final : public INonDelegatingUnknown,
     if (frames > capacity_ || (mix_ == 0.0f && target == 0.0f)) {
       if (dst != src) memcpy(dst, src, size_t(frames) * ch * sizeof(float));
       mixClip(dst, frames, ch);
+      partyMix(dst, frames, ch);
       applyMute(dst, frames * ch, s.mute);
       raise(gLive.peakOut, muteGain_ * peakIn);
       measureLoudness(dst, frames, ch);
@@ -595,6 +629,7 @@ class AuraApo final : public INonDelegatingUnknown,
     }
     mix_ = target;
     mixClip(dst, frames, ch);
+    partyMix(dst, frames, ch);
     applyMute(dst, frames * ch, s.mute);
     float peakOut = 0;
     for (UINT32 i = 0; i < frames * ch; i++) peakOut = std::max(peakOut, std::fabs(dst[i]));
@@ -639,6 +674,42 @@ class AuraApo final : public INonDelegatingUnknown,
     gInstances.erase(std::remove(gInstances.begin(), gInstances.end(), this), gInstances.end());
     ReleaseSRWLockExclusive(&gInstancesLock);
     watchRelease();
+  }
+
+  // Party: add what the window wrote (audio thread). Pieces arrive every 10-20 ms; playing starts
+  // 40 ms after the first, so a late one is covered, and nothing is dropped unless more than 0.3 s
+  // is waiting. A second without news means the window is gone: nothing is added.
+  void partyMix(float* dst, UINT32 frames, UINT32 ch) {
+    LiveShared* mix = gLive.party.load(std::memory_order_relaxed) && sampleRate_ == 48000.0f ? gMixMap.load(std::memory_order_acquire) : nullptr;
+    if (!mix) {
+      partyPlaying_ = false;
+      return;
+    }
+    const uint32_t mask = kLiveN - 1, pw = mix->playW;
+    if (pw != partySeen_) {
+      partySeen_ = pw;
+      partyIdle_ = 0;
+    } else if (partyIdle_ < 1000000) {
+      partyIdle_ += frames;
+    }
+    if (partyIdle_ > 48000) {
+      partyPlaying_ = false;
+      partyHold_ = 0;
+      partyRead_ = pw;
+      return;
+    }
+    uint32_t waiting = pw - partyRead_;
+    if (waiting > kLiveN / 2) { partyRead_ = pw; waiting = 0; partyPlaying_ = false; partyHold_ = 0; }
+    if (waiting > 14400) { partyRead_ = pw - 1920; waiting = 1920; }
+    for (UINT32 i = 0; i < frames; i++) {
+      if (!partyPlaying_ && waiting > 0 && ++partyHold_ >= 1920) partyPlaying_ = true;
+      if (!partyPlaying_) continue;
+      if (waiting == 0) { partyPlaying_ = false; partyHold_ = 0; continue; }
+      const float s = mix->play[partyRead_ & mask];
+      partyRead_++;
+      waiting--;
+      for (UINT32 c = 0; c < ch; c++) dst[i * ch + c] = std::clamp(dst[i * ch + c] + s, -1.0f, 1.0f);
+    }
   }
 
   // Live AI voice: give the window the voice, take the converted one back (audio thread).
@@ -761,6 +832,8 @@ class AuraApo final : public INonDelegatingUnknown,
   std::vector<float> mono_, left_, right_;
   uint32_t liveRead_ = 0, liveSeen_ = 0, liveIdle_ = 0, liveHold_ = 0;
   bool livePlaying_ = false;
+  uint32_t partyRead_ = 0, partySeen_ = 0, partyIdle_ = 0, partyHold_ = 0;
+  bool partyPlaying_ = false;
 };
 
 class Factory final : public IClassFactory {

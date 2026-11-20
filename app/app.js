@@ -109,6 +109,8 @@ const DEFAULTS = {
   loud: 0, // output loudness to hold, LUFS; 0 = leave it
   dehum: false, // notch out 50 Hz mains hum
   autoUpdate: true, // ask GitHub for a newer release at start
+  party: false, // the party section, off until switched on in Settings
+  partyUrl: '',
   aiVoice: '', // the chosen AI voice (id of an imported model)
   aiPitch: 0, // semitones for AI conversion
   aiSpeaker: 50, // which of the open model's timbres
@@ -242,7 +244,7 @@ function systemLines(enabled, live = true, clean = false) {
     `dereverb=${state.g.dereverb}`,
     `loud=${state.loud || 0}`,
     `dehum=${state.dehum ? 1 : 0}`,
-    ...(live ? [`ailive=${aiLiveOn ? 1 : 0}`] : []), // the module plays the voice the window converts
+    ...(live ? [`ailive=${aiLiveOn ? 1 : 0}`, `party=${state.party ? 1 : 0}`] : []), // the module plays the voice the window converts
     ...Object.entries(clean ? FX_ZERO : fxValues()).map(([k, value]) => `${k}=${value}`),
     `ingain=${state.inGain}`,
     `outgain=${state.outGain}`,
@@ -1786,7 +1788,7 @@ $('#catalogSite').addEventListener('click', () => window.auraSystem.openCatalogS
 /* ───────── Pages ───────── */
 const tabButtons = [...$('#tabs').children];
 function showTab(name) {
-  if (!tabButtons.some((b) => b.dataset.tab === name)) name = 'voice';
+  if (!tabButtons.some((b) => b.dataset.tab === name && !b.hidden)) name = 'voice';
   for (const b of tabButtons) b.setAttribute('aria-selected', String(b.dataset.tab === name));
   $('#pageTitle').textContent = tabButtons.find((b) => b.dataset.tab === name).textContent.trim(); // the page's large title
   for (const page of document.querySelectorAll('.page')) page.hidden = page.dataset.page !== name;
@@ -1797,6 +1799,7 @@ function showTab(name) {
   if (name === 'effects') renderVoices();
   if (name === 'voice') queueEq();
   if (name === 'ai') renderAi();
+  if (name === 'party') renderParty();
   if (name === 'sounds' && !catalog.started) {
     catalog.started = true; // nothing is fetched until the user actually opens the page
     loadCatalog(true);
@@ -2570,6 +2573,98 @@ $('#aiFile').addEventListener('click', async () => {
   const res = (await sendMono(token, out)) ? await window.auraSystem.renderFinish(token, null) : { ok: false };
   aiNote(res.ok ? `Готово: «${res.name}», ${Math.round(res.seconds)} с.` : 'Не получилось сохранить файл.', !res.ok);
 });
+
+/* ───────── Party ─────────
+ * A site in a window of its own, its sound taken here (to be passed on to friends), and a stream
+ * into the microphone for their voices. This step has no network yet: it proves the two ends. */
+const partyTab = tabButtons.find((b) => b.dataset.tab === 'party');
+const partyNote = (text, warn = false) => {
+  $('#partyNote').textContent = text;
+  $('#partyNote').className = warn ? 'footnote warn' : 'footnote';
+};
+let partyStream = null;
+let partyAnalyser = null;
+let partyTime = null;
+function stopPartyCapture() {
+  partyStream?.getTracks().forEach((t) => t.stop());
+  partyStream = partyAnalyser = null;
+  $('#partyLevel').style.transform = 'scaleX(0)';
+}
+// The sound of the party window, and of nothing else (main.js decides what is handed over).
+async function startPartyCapture() {
+  stopPartyCapture();
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+    stream.getVideoTracks().forEach((t) => t.stop()); // only the sound is wanted
+    if (!stream.getAudioTracks().length) throw new Error('no audio');
+    partyStream = stream;
+    const ctx = engine.ctx || new AudioContext({ sampleRate: 48000 });
+    partyAnalyser = ctx.createAnalyser();
+    partyAnalyser.fftSize = 2048;
+    partyTime = new Float32Array(2048);
+    ctx.createMediaStreamSource(stream).connect(partyAnalyser);
+  } catch {
+    partyNote('Не получилось взять звук окна.', true);
+  }
+}
+async function renderParty() {
+  const s = await window.auraSystem.partyState();
+  $('#partyTitle').textContent = s.open ? s.title || s.url : 'Окно закрыто';
+  $('#partyClose').hidden = !s.open;
+  $('#partyOpen').textContent = s.open ? 'Перейти' : 'Открыть';
+  if (!s.open && partyStream) stopPartyCapture();
+  if (s.open && !partyStream) startPartyCapture();
+}
+$('#partyUrl').value = state.partyUrl || '';
+$('#partyOpen').addEventListener('click', async () => {
+  state.partyUrl = $('#partyUrl').value.trim();
+  save();
+  const res = await window.auraSystem.partyOpen(state.partyUrl);
+  if (res.error) return partyNote(res.error, true);
+  partyNote('');
+  setTimeout(renderParty, 800);
+});
+$('#partyUrl').addEventListener('keydown', (e) => e.key === 'Enter' && $('#partyOpen').click());
+$('#partyClose').addEventListener('click', async () => {
+  await window.auraSystem.partyClose();
+  renderParty();
+});
+$('#partyBeep').addEventListener('click', async () => {
+  if (!sys.installed) return partyNote('Подмешивание идёт через модуль в микрофоне: встройте его в Настройках.', true);
+  await window.auraSystem.partyBeep();
+  partyNote('Сигнал отправлен. Если модуль ещё не обновлён, его не будет слышно — обновите модуль в Настройках.');
+});
+setInterval(() => {
+  if (!state.party || partyTab.getAttribute('aria-selected') !== 'true') return;
+  renderParty();
+}, 2000);
+setInterval(() => {
+  if (!partyAnalyser || !windowVisible) return;
+  partyAnalyser.getFloatTimeDomainData(partyTime);
+  let sum = 0;
+  for (let i = 0; i < partyTime.length; i++) sum += partyTime[i] * partyTime[i];
+  const db = 10 * Math.log10(sum / partyTime.length + 1e-12);
+  $('#partyLevel').style.transform = `scaleX(${clamp((db + 60) / 54, 0, 1).toFixed(3)})`;
+}, 80);
+function applyPartySwitch() {
+  partyTab.hidden = !state.party;
+  $('#partyOn').checked = !!state.party;
+  if (!state.party && partyTab.getAttribute('aria-selected') === 'true') showTab('voice');
+}
+$('#partyOn').addEventListener('change', async (e) => {
+  state.party = e.target.checked;
+  save();
+  if (!state.party) { stopPartyCapture(); await window.auraSystem.partyClose(); }
+  applyPartySwitch();
+  pushSystem();
+});
+$('#partyForget').addEventListener('click', async (e) => {
+  e.preventDefault();
+  stopPartyCapture();
+  await window.auraSystem.partyForget();
+  flash('Данные пати удалены: входы на сайты, куки, кэш');
+});
+applyPartySwitch();
 
 /* ───────── Start with Windows ───────── */
 window.auraSystem?.getAutostart?.().then((on) => ($('#autostart').checked = !!on));

@@ -36,6 +36,7 @@ struct Settings {
   unsigned playId = 0, playStop = 0;
   float clipGain = 1.0f;
   float dereverb = 0;     // room-echo reduction, 0 = off .. 1 = maximum
+  bool party = false;     // the window is feeding other people's voices: add them to what leaves the microphone
   bool aiLive = false;    // the window is converting the voice with a neural model: play what it hands back
   Params params;
 };
@@ -63,6 +64,7 @@ inline Settings parseSettings(const char* text, Settings s = Settings()) {
     else if (key == "ns") s.nsStrength = clamp(v / 100, 0, 1);
     else if (key == "nsengine") s.nsEngine = v > 0.5 ? 1 : 0;
     else if (key == "ailive") s.aiLive = v > 0.5;
+    else if (key == "party") s.party = v > 0.5;
     else if (key == "playid") s.playId = unsigned(clamp(v, 0, 4.0e9));
     else if (key == "playstop") s.playStop = unsigned(clamp(v, 0, 4.0e9));
     else if (key == "clipgain") s.clipGain = clamp(v / 100, 0, 1.5);
