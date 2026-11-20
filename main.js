@@ -135,7 +135,7 @@ function createWindow() {
     if (shotArg && clickSelector) {
       setTimeout(async () => {
         const result = await win.webContents
-          .executeJavaScript(`(async () => { for (let i = 0; i < 40; i++) { const el = document.querySelector(${JSON.stringify(clickSelector)}); if (el) { el.click(); return 'clicked ' + el.tagName + ' "' + el.textContent + '"'; } await new Promise((r) => setTimeout(r, 250)); } return 'no element'; })()`)
+          .executeJavaScript(`(async () => { for (let i = 0; i < 40; i++) { const el = document.readyState === 'complete' && document.querySelector(${JSON.stringify(clickSelector)}); if (el) { el.click(); return 'clicked ' + el.tagName + ' "' + el.textContent + '"'; } await new Promise((r) => setTimeout(r, 250)); } return 'no element'; })()`)
           .catch((err) => 'click failed: ' + err.message);
         console.log('[click]', result);
       }, 1500);
