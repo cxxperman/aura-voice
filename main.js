@@ -873,6 +873,12 @@ function startHub() {
         if (args?.page === 'keys') command('page', 'keys');
         return null;
       },
+      // «Закрыть» в трее core.txt: пока значок держит core.txt, это выход из aura.txt
+      quit: () => {
+        quitting = true;
+        setTimeout(() => app.quit(), 0);   // сначала ответ хабу, потом выход
+        return null;
+      },
     },
     onState(topic, data) {
       if (topic !== 'hub.theme') return;
