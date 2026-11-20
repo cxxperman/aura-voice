@@ -511,7 +511,7 @@ const aiEncoder = () => {
 // One file, 109 timbres. Fetched on the user's click from this project's releases.
 const AI_BASE = {
   file: 'rvc-v2-base-40k.onnx',
-  url: 'https://github.com/cxxperman/aura-voice/releases/download/ai-voices-1/rvc-v2-base-40k.onnx',
+  url: 'https://github.com/cxxperman/aura.txt/releases/download/ai-voices-1/rvc-v2-base-40k.onnx',
   size: 110892490,
   sha256: 'f1bac9e2433823c9a39d5375c2cc7b7e98cd4c6300fd26efb67a9bf9b9681023',
   speakers: 109,
@@ -1196,7 +1196,9 @@ function moduleOutdated() {
 /* ───── Updates ─────
  * Releases of the project's own GitHub repository are the only source. The window asks, the
  * user decides; nothing is downloaded or installed without a click. */
-const UPDATE_REPO = 'cxxperman/aura-voice';
+const UPDATE_REPO = 'cxxperman/aura.txt';
+// The repository's earlier name: GitHub may still hand out links under it, and they are just as much ours.
+const UPDATE_REPOS = [UPDATE_REPO, 'cxxperman/aura-voice'];
 const newer = (a, b) => {
   const x = a.split('.').map(Number), y = b.split('.').map(Number);
   for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
@@ -1214,7 +1216,7 @@ ipcMain.handle('update:check', async () => {
       for (const asset of rel.assets || []) {
         const m = /^Aura-Setup-(\d+\.\d+\.\d+)\.exe$/.exec(asset.name || '');
         const url = String(asset.browser_download_url || '');
-        if (!m || !url.startsWith(`https://github.com/${UPDATE_REPO}/releases/download/`)) continue;
+        if (!m || !UPDATE_REPOS.some((repo) => url.startsWith(`https://github.com/${repo}/releases/download/`))) continue;
         if (newer(m[1], app.getVersion()) && (!best || newer(m[1], best.version))) {
           best = { version: m[1], url, size: Number(asset.size) || 0, digest: typeof asset.digest === 'string' ? asset.digest : '' };
         }
