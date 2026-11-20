@@ -925,6 +925,7 @@ $('#inputId').addEventListener('change', async (e) => {
   state.inputId = e.target.value;
   save();
   if (engine.running && !TEST) await engine.openMic(state).catch(() => setStatus('Не удалось открыть этот микрофон', true));
+  partyDevices();
 });
 $('#outputId').addEventListener('change', async (e) => {
   state.outputId = e.target.value;
@@ -938,6 +939,7 @@ $('#monitorId').addEventListener('change', async (e) => {
   save();
   await engine.setMonitorDevice(state.monitorId);
   engine.apply(state);
+  partyDevices();
 });
 navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
 
@@ -2772,9 +2774,9 @@ async function startAppCapture(pid) {
     node.connect(dest);
     partyFeed = { ctx, node, stream: dest.stream };
   }
-  if (!(await window.auraSystem.partyCapture(pid))) return partyNote('Не получилось начать захват этой программы.', true);
-  await partyFeed.ctx.resume();
   partyAppPid = pid;
+  if (!(await window.auraSystem.partyCapture(pid))) { partyAppPid = 0; $('#partyApp').value = ''; renderParty(); return partyNote('Не получилось начать захват этой программы.', true); }
+  await partyFeed.ctx.resume();
   partyStream = partyFeed.stream;
   partyRtc?.setSource(partyStream);
   partyAnalyser = partyFeed.ctx.createAnalyser();
@@ -2900,6 +2902,23 @@ async function partyStop(note = '') {
   renderPartyNet();
   if (note) partyNote(note);
 }
+// Devices chosen in Settings apply to a party that is already going: where the guest hears the
+// host's sound, and which microphone the guest speaks into.
+const partyMic = () => navigator.mediaDevices.getUserMedia({ audio: { deviceId: state.inputId ? { exact: state.inputId } : undefined, echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+async function partyDevices() {
+  if (partyVoice.srcObject) partyVoice.setSinkId(state.monitorId || '').catch(() => partyNote('Не получилось переключить звук пати на эти наушники.', true));
+  if (partyRole !== 'guest' || !partyRtc?.micStream) return;
+  const now = partyRtc.micStream.getAudioTracks()[0]?.getSettings().deviceId;
+  if (state.inputId ? now === state.inputId : now === 'default') return; // already on it
+  try {
+    const mic = await partyMic();
+    await partyRtc.setMic(mic);
+    partyRtc.micStream = mic;
+  } catch {
+    partyNote('Не получилось открыть этот микрофон — в пати остался прежний.', true);
+  }
+}
+navigator.mediaDevices.addEventListener('devicechange', () => partyDevices()); // headphones unplugged, a new default: follow it
 const newPartyRtc = () =>
   new PartyRtc({
     signal: (id, msg) => window.auraSystem.partySignal(id, msg),
@@ -2936,7 +2955,7 @@ $('#partyJoin').addEventListener('click', async () => {
   const name = $('#partyName').value.trim() || 'Гость';
   let mic = null;
   try { // echo cancelling on: what you hear from the party must not go back into it through your microphone
-    mic = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: state.inputId ? { exact: state.inputId } : undefined, echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+    mic = await partyMic();
   } catch {
     return partyNote('Не получилось открыть микрофон.', true);
   }

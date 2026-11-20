@@ -215,6 +215,24 @@ class PartyRtc {
     this.isGuest = true;
   }
 
+  // Guest: another microphone, without leaving the party.
+  async setMic(mic) {
+    const old = this.mic;
+    this.mic = mic;
+    const track = mic.getAudioTracks()[0];
+    for (const p of this.peers.values()) {
+      if (p.piped) continue;
+      const sender = p.pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
+      if (sender) await sender.replaceTrack(track).catch(() => {});
+    }
+    if (this.micNode) {
+      this.micNode.disconnect();
+      this.micNode = this.ctx.createMediaStreamSource(mic);
+      this.micNode.connect(this.sendBus);
+    }
+    old?.getTracks().forEach((t) => t.stop());
+  }
+
   async onSignal(id, msg) {
     let entry = this.peers.get(id);
     if (msg.t === 'offer') { // guest side
