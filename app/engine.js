@@ -197,6 +197,8 @@ class Engine {
     this.audio = new Audio();
     this._time = new Float32Array(1024);
     this._freq = new Uint8Array(512);
+    this.generation = 0; // grows on every start and stop: a stream taken from the graph (voiceStream) belongs to one of them
+    this.onchange = null; // called after start and stop
   }
 
   get running() { return !!this.ctx; }
@@ -234,6 +236,8 @@ class Engine {
     await this.setMonitorDevice(state.monitorId);
     this.audio.play().catch(() => {});
     if (c.state !== 'running') await c.resume();
+    this.generation++;
+    this.onchange?.();
   }
 
   async stop() {
@@ -247,6 +251,28 @@ class Engine {
     this.ctx = null;
     this.n = null;
     if (c) await c.close();
+    if (c) {
+      this.generation++;
+      this.onchange?.();
+    }
+  }
+
+  /** The processed voice exactly as it goes to the "output to apps" device (silent while a sample plays), as a
+   *  stream — for the party cable (app/party-cable.js). Only without the module: with it the graph carries no voice out. */
+  voiceStream() {
+    if (!this.n || this.system) return null;
+    if (!this.n.voiceDest) {
+      this.n.voiceDest = this.ctx.createMediaStreamDestination();
+      this.n.mainOut.connect(this.n.voiceDest);
+    }
+    return this.n.voiceDest.stream;
+  }
+
+  releaseVoiceStream() {
+    const d = this.n?.voiceDest;
+    if (!d) return;
+    this.n.voiceDest = null;
+    try { this.n.mainOut.disconnect(d); } catch {}
   }
 
   _build() {

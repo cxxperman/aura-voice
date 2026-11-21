@@ -138,14 +138,36 @@ const electron = {
   dialog: {}, shell: { openExternal: async (u) => opened.push(u) }, nativeTheme: {},
   net: { fetch: async () => { throw new Error('без сети'); } }, utilityProcess: { fork() { throw new Error('без процессов'); } },
 };
+// «Пати через Discord»: будто AuraCapture.exe на месте и Discord запущен — только когда случай этого просит
+const fake = { capture: false, discord: false };
+const children = [];
+const { EventEmitter } = require('events');
 const childProcess = {
-  execFile(cmd, args, opts, cb) { setImmediate(() => (cb || opts)(new Error('заглушка'), '')); },
-  spawn(cmd, args) { spawned.push([path.basename(cmd)].concat(args || [])); return { unref() {} }; },
+  execFile(cmd, args, opts, cb) {
+    const done = cb || opts;
+    const name = path.basename(cmd).toLowerCase();
+    if (fake.discord && name === 'tasklist.exe') return setImmediate(() => done(null, '"Discord.exe","5100","Console","1","90 K"\r\n"Discord.exe","5200","Console","1","90 K"\r\n'));
+    if (fake.discord && name === 'powershell.exe' && /Win32_Process/.test(String(args))) return setImmediate(() => done(null, JSON.stringify([{ ProcessId: 5200, ParentProcessId: 5100, Name: 'Discord.exe' }, { ProcessId: 5100, ParentProcessId: 4000, Name: 'Discord.exe' }])));
+    setImmediate(() => done(new Error('заглушка'), ''));
+  },
+  spawn(cmd, args) {
+    spawned.push([path.basename(cmd)].concat(args || []));
+    const c = new EventEmitter();
+    c.stdout = new EventEmitter();
+    c.stderr = new EventEmitter();
+    c.unref = () => {};
+    c.kill = () => { if (c.killed) return; c.killed = true; setImmediate(() => c.emit('exit', null)); };
+    children.push(c);
+    return c;
+  },
 };
+const fakeFs = Object.assign(Object.create(fs), { existsSync: (p) => (fake.capture && /AuraCapture\.exe$/i.test(String(p))) || fs.existsSync(p) });
 const load = Module._load;
 Module._load = function (request, parent) {
   if (request === 'electron') return electron;
-  if (request === 'child_process' && parent && path.resolve(parent.filename) === path.resolve(repo, 'main.js')) return childProcess;
+  const fromMain = parent && path.resolve(parent.filename) === path.resolve(repo, 'main.js');
+  if (request === 'child_process' && fromMain) return childProcess;
+  if (request === 'fs' && fromMain) return fakeFs;
   return load.apply(this, arguments);
 };
 
@@ -341,6 +363,7 @@ Module._load = function (request, parent) {
   eq('sounds.play: без data — null', await maska.command('aura', 'sounds.play', { id: 'p1' }), { ok: true, data: null });
   eq('...до окна дошли имя и args', asked.slice(-1), [['cmd', 'sounds.play', { id: 'p1' }]]);
   eq('party.discord: до окна, data null', [await maska.command('aura', 'party.discord', { on: true }), asked.slice(-1)], [{ ok: true, data: null }, [['cmd', 'party.discord', { on: true }]]]);
+  eq('party.discord с where: до окна как есть', [await maska.command('aura', 'party.discord', { on: true, where: 'browser' }), asked.slice(-1)], [{ ok: true, data: null }, [['cmd', 'party.discord', { on: true, where: 'browser' }]]]);
   eq('party.site: до окна, data null', [await maska.command('aura', 'party.site', { open: true, url: 'example.com' }), asked.slice(-1)], [{ ok: true, data: null }, [['cmd', 'party.site', { open: true, url: 'example.com' }]]]);
   await maska.command('aura', 'effects.off');
   eq('без args — пустой объект', asked.slice(-1), [['cmd', 'effects.off', {}]]);
@@ -389,6 +412,52 @@ Module._load = function (request, parent) {
   eq('окну Aura сообщено о режиме', win.sent.filter((x) => x[0] === 'party:event' && x[1] === 'discord').slice(-1).map((x) => [x[2].on, x[2].site]), [[true, true]]);
   await handles['party:discord-mode']({}, false);
   await handles['party:close']();
+
+  // сайт в своём браузере: окну пати preload не нужен; захват Discord — без окна пати, когда кабель есть; звук — в окно Aura
+  await handles['party:open']({}, 'example.com');
+  await handles['party:discord-mode']({}, true, 'window', false);
+  const pwWin = partyWins().slice(-1)[0];
+  eq('вариант «окно»: окно пати с preload', prefs(pwWin)[0], 'party-preload.js');
+  let bst = await handles['party:discord-mode']({}, true, 'browser', false);
+  const pwBr = partyWins().slice(-1)[0];
+  eq('вариант «браузер»: открытое окно пати сделано заново без preload', [pwWin.destroyed, prefs(pwBr), pwBr.url], [true, [null, false, true, true], 'https://example.com']);
+  eq('вариант «браузер»: состояние', [bst.on, bst.where, bst.cable, bst.site], [true, 'browser', false, true]);
+  await handles['party:discord-mode']({}, true, 'browser', true);
+  eq('вариант «браузер», кабель есть: окно пати больше не пересоздаётся', partyWins().length, partyWins().indexOf(pwBr) + 1);
+  await handles['party:close']();
+  fake.capture = true;
+  fake.discord = true;
+  const captures = () => spawned.filter((x) => /AuraCapture/i.test(x[0]));
+  await handles['party:discord-mode']({}, true, 'window', true);
+  await wait(100);
+  eq('вариант «окно» без окна пати: захвата нет', captures().length, 0);
+  await handles['party:discord-mode']({}, true, 'browser', false);
+  await wait(100);
+  eq('вариант «браузер» без кабеля: захвата нет', captures().length, 0);
+  bst = await handles['party:discord-mode']({}, true, 'browser', true);
+  eq('вариант «браузер», кабель есть, окна пати нет: режим включён', [bst.on, bst.where, bst.cable, bst.site, bst.available], [true, 'browser', true, false, true]);
+  await until(() => captures().length === 1, 2000);
+  eq('...и захват Discord запущен — корень дерева', captures(), [['AuraCapture.exe', '5100']]);
+  const cap = children[children.length - 1];
+  cap.stderr.emit('data', Buffer.from('capturing\n'));
+  eq('слышит Discord', (await handles['party:discord-state']()).hearing, true);
+  const pcmSent = () => win.sent.filter((x) => x[0] === 'party:cable-pcm');
+  const fromCapture = Buffer.from(new Float32Array([0.5, -0.25, 0.125]).buffer);
+  cap.stdout.emit('data', fromCapture.subarray(0, 7)); // кусок не на границе отсчёта: остаток ждёт следующего
+  cap.stdout.emit('data', fromCapture.subarray(7));
+  const got = pcmSent().map((x) => [...new Float32Array(x[1])]);
+  eq('звук Discord — в окно Aura, каналом party:cable-pcm, целыми отсчётами', got, [[0.5], [-0.25, 0.125]]);
+  eq('...а не во фреймы окна пати', win.sent.filter((x) => x[0] === 'party:discord-pcm').length, 0);
+  eq('окну Aura сообщено: where и cable', win.sent.filter((x) => x[0] === 'party:event' && x[1] === 'discord').slice(-1).map((x) => [x[2].where, x[2].cable, x[2].hearing]), [['browser', true, true]]);
+  bst = await handles['party:discord-mode']({}, true, 'browser', false);
+  eq('кабель пропал: захват остановлен', [cap.killed, bst.hearing, bst.found], [true, false, false]);
+  await handles['party:discord-mode']({}, true, 'browser', true);
+  await until(() => captures().length === 2, 2000);
+  const cap2 = children[children.length - 1];
+  await handles['party:discord-mode']({}, false, 'browser', true);
+  eq('режим выключен: захват остановлен', [captures().length, cap2.killed], [2, true]);
+  fake.capture = false;
+  fake.discord = false;
   // какой процесс Discord слушать: корень дерева (party-discord.js)
   const pd = require(path.join(repo, 'party-discord.js'));
   const listed = pd.parseTasklist('"System","4","Services","0","1 K"\r\n"Discord.exe","5100","Console","1","90 K"\r\n"Discord.exe","5200","Console","1","90 K"\r\n"DiscordPTB.exe","7000","Console","1","9 K"\r\n');
@@ -448,7 +517,7 @@ Module._load = function (request, parent) {
   await handles['core:go']({}, 'general');
   await handles['core:go']({}, 'evil');
   await handles['core:go']({});
-  eq('core:go без связи: запуск core.txt с --page', spawned, [['Core.exe', '--page', 'general'], ['Core.exe'], ['Core.exe']]);
+  eq('core:go без связи: запуск core.txt с --page', spawned.filter((x) => !/AuraCapture/i.test(x[0])), [['Core.exe', '--page', 'general'], ['Core.exe'], ['Core.exe']]);
 
   // выход кнопкой в окне: значок больше не появляется
   await handles['app:quit']();

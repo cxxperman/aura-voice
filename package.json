@@ -10,6 +10,7 @@
     "test:family": "node scripts/family-test.js",
     "test:main": "node scripts/main-test.js",
     "test:party-inject": "node scripts/party-inject-test.js",
+    "test:party-cable": "node scripts/party-cable-test.js",
     "dist": "electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {

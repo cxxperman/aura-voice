@@ -676,9 +676,12 @@ ipcMain.handle('ai:convert', async (_e, pcm, id, st, speaker) => {
  * taken by the Aura window — to be passed on to friends — and what friends say is added to the
  * microphone by the module (party-mix.js). Normally the page in the party window is never touched:
  * nothing is injected into it, nothing about the browser is disguised. The one exception is the
- * "party through Discord" mode, switched on by the user: then the window gets party-preload.js,
- * which swaps the page's microphone for "the real microphone + Discord's sound" (so the person on
- * the site hears the call, while Discord itself still gets only the voice), and changes nothing else.
+ * "party through Discord" mode with the site in the party window, switched on by the user: then the
+ * window gets party-preload.js, which swaps the page's microphone for "the real microphone + Discord's
+ * sound" (so the person on the site hears the call, while Discord itself still gets only the voice),
+ * and changes nothing else. With the site in the person's own browser instead, the party window is
+ * left alone: Discord's sound goes to the Aura window, which plays "voice + call" into a virtual cable
+ * (app/party-cable.js), and the browser takes the cable as its microphone.
  * The window has a profile of its own, apart from Aura's, and the one thing it may be granted is
  * the microphone, asked per site. */
 const { Mix } = require('./party-mix.js');
@@ -686,6 +689,9 @@ const { DISCORD_NAMES, isDiscord, parseTasklist, parseCim, pickDiscordRoot, Fram
 let partyWin = null;
 let partyMix = null;
 let partyDiscord = false; // "party through Discord": the window says, on start and on every change
+let partyDiscordWhere = 'window'; // where the site is: 'window' (the party window, preload) | 'browser' (own browser, cable)
+let partyCable = false; // 'browser': the Aura window has found the cable device to play into
+const partyPreloadWanted = () => partyDiscord && partyDiscordWhere === 'window';
 const partyMicAllowed = new Set(); // origins the user said yes to, this run only
 const partySession = () => session.fromPartition('persist:party');
 const originOf = (url) => {
@@ -727,7 +733,7 @@ const partySiteOpen = () => !!partyWin && !partyWin.isDestroyed();
 // The preload is fixed when a window is made: the mode decides it, and a change of mode makes the window anew.
 function makePartyWin(bounds, show = true) {
   partyPermissions();
-  const discordMode = partyDiscord;
+  const discordMode = partyPreloadWanted();
   const w = new BrowserWindow({
     width: 1100, height: 820, ...(bounds || {}), show, title: 'Aura — пати', backgroundColor: '#111114', icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
@@ -754,10 +760,14 @@ ipcMain.handle('party:close', () => {
   if (partyWin && !partyWin.isDestroyed()) partyWin.close();
   return true;
 });
-// The mode, from the window. With the party window open its page loads again — now with the preload, or without it.
-ipcMain.handle('party:discord-mode', (_e, on) => {
+// The mode, from the window: on, where the site is, whether the cable is there. With the party window open and
+// the preload now wanted or no longer wanted, its page loads again — with the preload, or without it.
+ipcMain.handle('party:discord-mode', (_e, on, where, cable) => {
   partyDiscord = !!on;
-  if (partySiteOpen() && partyWin.discordMode !== partyDiscord) {
+  partyDiscordWhere = where === 'browser' ? 'browser' : 'window';
+  partyCable = !!cable;
+  if (!partyPreloadWanted()) discordFeed.clear(); // the pages of the party window no longer get the sound
+  if (partySiteOpen() && partyWin.discordMode !== partyPreloadWanted()) {
     const old = partyWin;
     const url = old.webContents.getURL();
     const shown = old.isVisible();
@@ -771,6 +781,9 @@ ipcMain.handle('party:discord-mode', (_e, on) => {
   return discordStatus();
 });
 ipcMain.handle('party:discord-state', () => discordStatus());
+// The cable driver is a third party's: Aura neither downloads nor installs it, only opens its page in the browser.
+const CABLE_SITE = 'https://vb-audio.com/Cable/';
+ipcMain.handle('party:cable-site', () => shell.openExternal(CABLE_SITE));
 ipcMain.handle('party:state', () => (partyWin && !partyWin.isDestroyed() ? { open: true, url: partyWin.webContents.getURL(), title: partyWin.webContents.getTitle().slice(0, 80) } : { open: false }));
 ipcMain.handle('party:forget', async () => { // everything the party window's profile holds: sign-ins, cookies, cache
   if (partyWin && !partyWin.isDestroyed()) partyWin.close();
@@ -891,14 +904,16 @@ ipcMain.handle('party:capture-stop', () => {
   return true;
 });
 
-/* "Party through Discord": Discord's sound, for the page in the party window and nothing else.
+/* "Party through Discord": Discord's sound, for the page in the party window — or, with the site in the person's
+ * own browser, for the Aura window, which plays it into the virtual cable (channel party:cable-pcm) — and nothing else.
  * A capture of its own (AuraCapture.exe once more), beside the one above: either can run without the other.
- * It runs while the mode is on and the party window is open. Discord is looked for every few seconds
- * while it is not being heard: tasklist (cheap) for whether it runs, and once per Discord start one
- * PowerShell query for which of its processes is the root of the tree (party-discord.js). */
+ * It runs while the mode is on and the party window is open ('window'), or the cable is there ('browser').
+ * Discord is looked for every few seconds while it is not being heard: tasklist (cheap) for whether it runs,
+ * and once per Discord start one PowerShell query for which of its processes is the root of the tree (party-discord.js). */
 const discordFeed = new FrameFeed('party:discord-pcm');
 const discord = { child: null, root: 0, found: false, hearing: false, timer: null, looking: false, failed: new Map(), told: '' };
-const discordStatus = () => ({ available: fs.existsSync(captureTool()), on: partyDiscord, site: partySiteOpen(), found: discord.found, hearing: discord.hearing });
+const discordStatus = () => ({ available: fs.existsSync(captureTool()), on: partyDiscord, where: partyDiscordWhere, cable: partyCable, site: partySiteOpen(), found: discord.found, hearing: discord.hearing });
+const discordWanted = () => partyDiscord && (partyDiscordWhere === 'browser' ? partyCable : partySiteOpen()) && fs.existsSync(captureTool());
 function tellDiscord() {
   const s = discordStatus();
   const text = JSON.stringify(s);
@@ -916,7 +931,7 @@ function discordStop() {
   discordFeed.clear();
 }
 function discordSync() {
-  if (partyDiscord && partySiteOpen() && fs.existsSync(captureTool())) {
+  if (discordWanted()) {
     if (!discord.timer) {
       discord.timer = setInterval(discordLook, 5000);
       discordLook();
@@ -959,7 +974,11 @@ function discordCapture(pid) {
     const all = rest.length ? Buffer.concat([rest, chunk]) : chunk;
     const whole = all.length - (all.length % 4);
     rest = all.subarray(whole);
-    if (whole && discord.child === child && discordFeed.size) discordFeed.send(all.buffer.slice(all.byteOffset, all.byteOffset + whole));
+    if (!whole || discord.child !== child) return;
+    const pcm = all.buffer.slice(all.byteOffset, all.byteOffset + whole);
+    if (partyDiscordWhere === 'browser') { // to the Aura window, for the cable; the pages of the party window get nothing
+      if (win && !win.isDestroyed()) win.webContents.send('party:cable-pcm', pcm);
+    } else if (discordFeed.size) discordFeed.send(pcm);
   });
   child.on('error', () => {});
   child.on('exit', () => {

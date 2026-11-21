@@ -115,6 +115,8 @@ const DEFAULTS = {
   partyUrl: '', // the last site opened in the party window (the hub's party.site opens it again)
   partyName: '',
   partyDiscord: false, // «Пати через Discord»: the site hears the Discord call (mixed inside its page, party-preload.js)
+  partyDiscordWhere: 'window', // …where the site is: 'window' (the party window) | 'browser' (own browser, through a virtual cable)
+  partyCableId: undefined, // the cable's playback device for 'browser'; undefined = never chosen → auto-detect VB-Cable
   aiVoice: '', // the chosen AI voice (id of an imported model)
   aiPitch: 0, // semitones for AI conversion
   aiSpeaker: 50, // which of the open model's timbres
@@ -175,6 +177,7 @@ function loadState() {
 }
 const state = loadState();
 if (TEST || PROBE) state.on = true;
+if (state.partyDiscordWhere !== 'browser') state.partyDiscordWhere = 'window';
 // Debounced: a slider drag fires dozens of changes a second, and each save serialises the whole state.
 let saveTimer = 0;
 const flushSave = () => {
@@ -288,6 +291,7 @@ async function pollSystem() {
     if (engine.running) await restartEngine();
     pushSystem();
     renderRoute();
+    partyCableSync(); // голос для кабеля пати: свой микрофон или голос движка
     publishHubState(); // mic / canHost
   }
   renderSystem();
@@ -520,8 +524,9 @@ function hubStatesNow() {
       direct: true, // пати по коду: компьютеры соединяются напрямую, участники видят IP-адреса друг друга
       people: people.filter(([, p]) => p.state === 'in' || p.state === 'on').length,
       asking: host ? people.filter(([, p]) => p.state === 'asking').map(([id, p]) => ({ id, name: p.name })) : [],
-      // пати через Discord: возможен ли режим, включён ли, открыто ли окно пати, слышит ли сайт звонок сейчас
-      discord: { available: !!partyDiscordNow.available, on: !!state.partyDiscord, site: !!partyDiscordNow.site, hearing: !!(state.partyDiscord && partyDiscordNow.site && partyDiscordNow.hearing) },
+      // пати через Discord: возможен ли режим, включён ли, открыто ли окно пати, слышит ли сайт звонок сейчас;
+      // где сайт (окно пати или свой браузер) и есть ли устройство кабеля
+      discord: { available: !!partyDiscordNow.available, on: !!state.partyDiscord, site: !!partyDiscordNow.site, hearing: partyDiscordHearing(), where: state.partyDiscordWhere, cable: !!partyCableNow.id },
     },
   };
 }
@@ -576,11 +581,21 @@ async function runHubCommand(name, args) {
   }
   if (name === 'party.discord') {
     const on = !!args.on;
-    if (on && !state.party) { // выключенный раздел включается, как в party.start; проверки — те же, что у переключателя
+    if (args.where !== undefined && !PARTY_WHERE.includes(args.where)) throw new Error('такого варианта нет');
+    const where = args.where ?? state.partyDiscordWhere; // без where — сохранённый
+    if (on) { // проверки — те же, что у переключателя; плюс кабель для своего браузера, и всё это до того, как что-то включится
       if (partyRole) throw new Error('сначала выйдите из пати по коду');
       if (!partyDiscordNow.available) throw new Error('режим недоступен');
-      await setPartyOn(true);
+      if (where === 'browser') {
+        await partyCableFind();
+        if (!partyCableNow.id) throw new Error('нет виртуального кабеля');
+      }
     }
+    if (where !== state.partyDiscordWhere) {
+      state.partyDiscordWhere = where;
+      save();
+    }
+    if (on && !state.party) await setPartyOn(true); // выключенный раздел включается, как в party.start
     await setPartyDiscord(on);
     return null;
   }
@@ -1039,6 +1054,7 @@ $('#inputId').addEventListener('change', async (e) => {
   save();
   if (engine.running && !TEST) await engine.openMic(state).catch(() => setStatus('Не удалось открыть этот микрофон', true));
   partyDevices();
+  partyCableSync(); // кабель пати берёт тот же микрофон
 });
 $('#outputId').addEventListener('change', async (e) => {
   state.outputId = e.target.value;
@@ -1046,6 +1062,7 @@ $('#outputId').addEventListener('change', async (e) => {
   if (!sys.installed) await engine.setOutput(state.outputId || null);
   renderRoute();
   liveStatus();
+  partyCableSync(); // совпал ли «Выход в приложения» с кабелем пати
 });
 $('#monitorId').addEventListener('change', async (e) => {
   state.monitorId = e.target.value;
@@ -3186,28 +3203,57 @@ async function setPartyOn(on) {
   publishHubState();
 }
 
-/* «Пати через Discord»: собеседник на сайте слышит звонок Discord. Звук Discord берёт main.js (свой AuraCapture),
- * смешивает с микрофоном сама страница окна пати (party-preload.js) — в системный микрофон он не идёт, поэтому
- * Discord по-прежнему получает только голос, без эха. Модуль в микрофоне для этого не нужен. С пати по коду не совмещается. */
+/* «Пати через Discord»: собеседник на сайте слышит звонок Discord. Звук Discord берёт main.js (свой AuraCapture).
+ * Сайт в окне пати — смешивает с микрофоном сама его страница (party-preload.js). Сайт в своём браузере — смешивает
+ * это окно и играет в виртуальный кабель (party-cable.js), а браузер берёт кабель микрофоном. В системный микрофон
+ * звонок не идёт ни так, ни так, поэтому Discord по-прежнему получает только голос, без эха. Модуль в микрофоне
+ * для этого не нужен. С пати по коду не совмещается. */
+const PARTY_WHERE = ['window', 'browser'];
 let partyDiscordNow = { available: false, on: false, site: false, found: false, hearing: false }; // что сообщил main.js
+const partyPreloadWanted = () => !!(state.party && state.partyDiscord && state.partyDiscordWhere === 'window');
 async function tellPartyDiscord() {
-  const s = await window.auraSystem?.partyDiscordMode?.(!!(state.party && state.partyDiscord));
+  await partyCableFind();
+  const on = !!(state.party && state.partyDiscord);
+  const s = await window.auraSystem?.partyDiscordMode?.(on, state.partyDiscordWhere, !!partyCableNow.id);
   if (s) partyDiscordNow = { ...partyDiscordNow, ...s };
   renderPartyDiscord();
+  partyCableSync();
+}
+// Слышит ли сайт звонок сейчас: в окне пати — захват идёт и окно открыто, в браузере — захват идёт и смесь играет в кабель
+function partyDiscordHearing() {
+  if (!state.partyDiscord || !partyDiscordNow.hearing) return false;
+  return state.partyDiscordWhere === 'browser' ? !!cableMix?.playing : !!partyDiscordNow.site;
 }
 function renderPartyDiscord() {
   const s = partyDiscordNow;
+  const on = !!state.partyDiscord;
+  const browser = on && state.partyDiscordWhere === 'browser';
   const box = $('#partyDiscord');
-  box.checked = !!state.partyDiscord;
-  box.disabled = !s.available && !state.partyDiscord; // включённый можно выключить всегда
+  box.checked = on;
+  box.disabled = !s.available && !on; // включённый можно выключить всегда
+  const cable = partyCableNow;
+  const pick = !cable.id && state.partyCableId === '' && cable.vb; // кабель есть, но в списке выбрано «Не выбран»
   let text = '';
   if (!s.available) text = 'Недоступно: нет компонента захвата звука — обновите Aura';
-  else if (state.partyDiscord) text = !s.site ? 'Откройте окно пати' : s.hearing ? 'Сайт слышит звонок' : s.found ? 'Подключаюсь к звуку Discord…' : 'Discord не запущен';
+  else if (browser) {
+    text = !cable.id ? (pick ? 'Выберите кабель в списке' : 'Нужен виртуальный звуковой кабель')
+      : cableFailed ? 'Не получилось вывести звук в кабель'
+      : !s.found ? 'Discord не запущен'
+      : partyDiscordHearing() ? 'В кабель идёт ваш голос и звонок' : 'Подключаюсь к звуку Discord…';
+  } else if (on) text = !s.site ? 'Откройте окно пати' : s.hearing ? 'Сайт слышит звонок' : s.found ? 'Подключаюсь к звуку Discord…' : 'Discord не запущен';
   const status = $('#partyDiscordStatus');
   status.textContent = text;
   status.hidden = !text;
-  status.classList.toggle('ok', !!(state.partyDiscord && s.site && s.hearing));
-  const code = !!state.partyDiscord; // пати по коду в это время недоступна
+  status.classList.toggle('ok', !!(s.available && partyDiscordHearing()));
+  $('#partyWhereRow').hidden = !on;
+  for (const b of $('#partyWhere').children) b.setAttribute('aria-checked', String(b.dataset.where === state.partyDiscordWhere));
+  $('#partyCableRow').hidden = !browser;
+  $('#partyCableNeed').hidden = !(browser && s.available && !cable.id && !pick);
+  const hint = $('#partyCableHint');
+  hint.hidden = !(browser && s.available && partyDiscordHearing());
+  hint.textContent = `В браузере выберите микрофоном „${cable.mic}“ — только для этого сайта.`;
+  $('#partyCableDefault').hidden = !(browser && cable.isDefault);
+  const code = on; // пати по коду в это время недоступна
   for (const id of ['partyCreate', 'partyJoin', 'partyCode']) $('#' + id).disabled = code;
   $('#partyCodeOff').hidden = !code;
 }
@@ -3215,16 +3261,129 @@ function renderPartyDiscord() {
 async function setPartyDiscord(on) {
   if (on && partyRole) throw new Error('сначала выйдите из пати по коду');
   if (on && !partyDiscordNow.available) throw new Error('режим недоступен');
-  const wasOpen = partyDiscordNow.site;
   state.partyDiscord = !!on;
   save();
+  await tellPartyDiscordRemade();
+  publishHubState();
+}
+// Сказать main.js о режиме; если окно пати из-за этого сделано заново (preload появился или ушёл) — его звук
+// для индикатора берётся снова
+async function tellPartyDiscordRemade() {
+  const wasOpen = partyDiscordNow.site;
+  const before = partyPreloadWanted();
   await tellPartyDiscord();
-  if (wasOpen && !partyAppPid) { // окно пати сделано заново: его звук для индикатора берётся снова
+  if (wasOpen && before !== partyPreloadWanted() && !partyAppPid) {
     stopPartyCapture();
     renderParty();
   }
+}
+// Где открыт сайт — сегменты в «Окне пати»
+async function setPartyDiscordWhere(where) {
+  if (!PARTY_WHERE.includes(where) || where === state.partyDiscordWhere) return;
+  state.partyDiscordWhere = where;
+  save();
+  await tellPartyDiscordRemade();
   publishHubState();
 }
+$('#partyWhere').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-where]');
+  if (b) setPartyDiscordWhere(b.dataset.where);
+});
+
+/* Вариант «В моём браузере»: устройство кабеля и смесь, которая в него играет.
+ * Автопоиск берёт только VB-Cable; Steam Streaming и прочие выходы — только если человек выбрал их сам. */
+const CABLE_AUTO = /VB-Audio|CABLE Input/i;
+const CABLE_NEVER_AUTO = /steam streaming/i;
+let partyCableNow = { id: '', mic: 'CABLE Output', vb: false, isDefault: false };
+async function partyCableFind() {
+  let all = [];
+  try {
+    all = fixture ? fixture.devices() : await navigator.mediaDevices.enumerateDevices();
+  } catch {}
+  const outputs = all.filter((d) => d.kind === 'audiooutput' && real(d)); // «по умолчанию» и «связь» кабелю ни к чему
+  const vb = outputs.filter((d) => CABLE_AUTO.test(d.label) && !CABLE_NEVER_AUTO.test(d.label));
+  if (state.partyCableId === undefined && vb.length) {
+    state.partyCableId = (vb.find((d) => /CABLE Input/i.test(d.label)) || vb[0]).deviceId; // обычный вход кабеля раньше 16-канального; не нашли — остаётся undefined: кабель, поставленный позже, найдётся сам
+    save();
+  }
+  const dev = state.partyCableId ? outputs.find((d) => d.deviceId === state.partyCableId) : null;
+  const virtual = dev && VIRTUAL.find((v) => v.re.test(dev.label));
+  // Кабель стал в Windows устройством по умолчанию (записи или воспроизведения, обычного или «связи»)?
+  const names = [/VB-Audio|CABLE Input|CABLE Output/i, ...(virtual ? [virtual.re, new RegExp(virtual.mic.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')] : [])];
+  const isDefault = all.some((d) => (d.deviceId === 'default' || d.deviceId === 'communications') && (d.kind === 'audioinput' || d.kind === 'audiooutput') && names.some((re) => re.test(d.label)));
+  partyCableNow = { id: dev?.deviceId || '', mic: virtual?.mic || 'CABLE Output', vb: vb.length > 0, isDefault };
+  fillSelect($('#partyCableId'), outputs, state.partyCableId, 'Не выбран');
+}
+$('#partyCableId').addEventListener('change', (e) => {
+  state.partyCableId = e.target.value;
+  save();
+  tellPartyDiscord().then(publishHubState);
+});
+$('#partyCableGet').addEventListener('click', () => window.auraSystem?.openCableSite?.());
+navigator.mediaDevices.addEventListener('devicechange', () => tellPartyDiscord().then(publishHubState)); // кабель поставили или он пропал
+
+/* Смесь для кабеля. Голос:
+ *   модуль встроен — настоящий микрофон из настроек, без обработки браузера: всё уже сделал модуль;
+ *   модуль не встроен, обработка включена — голос движка, ровно то, что уходит в «Выход в приложения»;
+ *     если «Выход в приложения» — тот же кабель, голос туда уже играет движок, и в смесь идёт только звонок;
+ *   модуль не встроен, обработка выключена — микрофон как есть.
+ * Всё пересобирается, когда меняется хоть что-то из этого; режим выключили, вариант сменили, кабель пропал —
+ * смесь останавливается, её микрофон и контекст освобождаются, а main.js останавливает захват. */
+let cableMix = null;
+let cableKey = '';
+let cableFailed = false;
+let cableChain = Promise.resolve();
+function partyCableVoice() {
+  if (sys.installed || !engine.running) return 'mic';
+  return state.outputId && state.outputId === partyCableNow.id ? 'none' : 'engine';
+}
+function partyCableSync() {
+  cableChain = cableChain.then(partyCableApply, partyCableApply);
+  return cableChain;
+}
+async function partyCableApply() {
+  const want = !TEST && !PROBE && state.party && state.partyDiscord && state.partyDiscordWhere === 'browser' && partyDiscordNow.available && partyCableNow.id;
+  const voice = want ? partyCableVoice() : '';
+  const key = want ? [partyCableNow.id, voice, voice === 'mic' ? state.inputId : '', voice === 'engine' ? engine.generation : ''].join('|') : '';
+  if (key === cableKey) return;
+  cableKey = key;
+  cableFailed = false;
+  const old = cableMix;
+  cableMix = null;
+  if (old) {
+    await old.stop();
+    engine.releaseVoiceStream();
+  }
+  if (key) {
+    const mix = new CableMix();
+    mix.onchange = () => { renderPartyDiscord(); publishHubState(); };
+    try {
+      let stream = null;
+      if (voice === 'engine') stream = engine.voiceStream();
+      if (voice === 'mic') stream = await partyCableMic();
+      await mix.start({ voice: stream, own: voice === 'mic', sinkId: partyCableNow.id });
+      cableMix = mix;
+    } catch (err) {
+      console.error('party cable failed:', err?.name, err?.message);
+      engine.releaseVoiceStream();
+      cableFailed = true; // до следующей перемены: та же попытка не повторяется по кругу
+    }
+  }
+  renderPartyDiscord();
+  publishHubState();
+}
+// Микрофон для кабеля: тот, что в настройках (пропал — системный), без эхоподавления, шумодава и АРУ браузера
+async function partyCableMic() {
+  const ask = (id) => navigator.mediaDevices.getUserMedia({ audio: { deviceId: id ? { exact: id } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+  try {
+    return await ask(state.inputId);
+  } catch (err) {
+    if (!state.inputId) throw err;
+    return ask('');
+  }
+}
+engine.onchange = () => partyCableSync(); // обработку включили или выключили: голос для кабеля берётся заново
+window.auraSystem?.onPartyCablePcm?.((pcm) => cableMix?.push(pcm));
 $('#partyDiscord').addEventListener('change', async (e) => {
   try {
     await setPartyDiscord(e.target.checked);
@@ -3523,6 +3682,7 @@ async function boot() {
     } catch {}
   }
   await refreshDevices();
+  tellPartyDiscord(); // имена устройств теперь видны: кабель пати находится по имени
   await pollSystem();
   renderMic();
   await loadCaptureDevices(); // the microphone's name picks its profile

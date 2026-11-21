@@ -33,8 +33,11 @@ contextBridge.exposeInMainWorld('auraSystem', {
   partyClose: () => ipcRenderer.invoke('party:close'),
   partyState: () => ipcRenderer.invoke('party:state'),
   partyForget: () => ipcRenderer.invoke('party:forget'),
-  partyDiscordMode: (on) => ipcRenderer.invoke('party:discord-mode', on), // → { available, on, site, found, hearing }
+  // where: 'window' | 'browser'; cable: the cable device is found (for 'browser') → { available, on, where, cable, site, found, hearing }
+  partyDiscordMode: (on, where, cable) => ipcRenderer.invoke('party:discord-mode', on, where, cable),
   partyDiscordState: () => ipcRenderer.invoke('party:discord-state'),
+  onPartyCablePcm: (fn) => ipcRenderer.on('party:cable-pcm', (_e, pcm) => fn(pcm)), // Discord's sound for the cable, mono float32 48 kHz
+  openCableSite: () => ipcRenderer.invoke('party:cable-site'),
   partyBeep: () => ipcRenderer.invoke('party:beep'),
   partyMix: (pcm) => ipcRenderer.send('party:mix', pcm),
   partyApps: () => ipcRenderer.invoke('party:apps'),

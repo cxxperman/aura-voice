@@ -518,6 +518,11 @@ kbd.failed { background: var(--red); color: #fff; }
 .switch small.party-discord-status { margin-top: 4px; color: var(--label-2); }
 .switch small.party-discord-status.ok { color: var(--green); }
 .switch small.party-discord-status[hidden] { display: none; }
+/* …где открыт сайт; для своего браузера — устройство кабеля и, пока его нет, страница драйвера */
+.field[hidden] { display: none; }
+.party-where { flex: none; width: 330px; max-width: 100%; }
+.party-where button { height: 26px; }
+.field > span.party-cable-note { flex: 0 1 auto; max-width: 60%; font-size: 12px; line-height: 1.4; color: var(--label-2); }
 .tabs button[hidden] { display: none; }
 
 /* ───────── Recordings page ───────── */
