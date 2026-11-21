@@ -123,7 +123,7 @@ const electron = {
     setLoginItemSettings(o) { calls.login.push(o); loginOn = !!o.openAtLogin; },
   },
   BrowserWindow: FakeWindow,
-  session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
+  session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDisplayMediaRequestHandler() {} } },
   ipcMain: { handle(ch, fn) { handles[ch] = fn; }, on(ch, fn) { listeners[ch] = fn; } },
   Tray: FakeTray,
   Menu: { buildFromTemplate: (t) => t },
@@ -312,6 +312,46 @@ Module._load = function (request, parent) {
   const n = win.sent.length;
   await core.command('aura', 'show', {});
   eq('show без страницы — без page', win.sent.slice(n).some((s) => s[1] === 'page'), false);
+
+  // звуки, эффекты и пати: команды идут в окно (оно не показывается), ответ окна с data — результат; состояния — из окна
+  const maskaSeen = {};
+  const maska = connect({ app: 'maska', name: 'Maska', port: server.port, topics: ['hub.apps', 'aura.*'], onState: (t, d) => { maskaSeen[t] = d; } });
+  await until(() => maska.online && maskaSeen['hub.apps']);
+  const NEW_COMMANDS = ['sounds.play', 'sounds.stop', 'effects.set', 'effects.off', 'party.start', 'party.stop', 'party.answer'];
+  const auraApp = (maskaSeen['hub.apps'] || []).find((a) => a.app === 'aura');
+  eq('hub.apps: aura умеет звуки, эффекты, пати', NEW_COMMANDS.filter((c) => auraApp && auraApp.commands.includes(c)), NEW_COMMANDS);
+  const asked = [];
+  let reply = null; // (kind, key, value) → аргументы hub:result после id: ok, error, data
+  const send = win.webContents.send;
+  win.webContents.send = (...a) => {
+    send(...a);
+    if (a[0] !== 'hub:command') return;
+    asked.push(a.slice(2));
+    if (reply) setImmediate(() => listeners['hub:result']({}, a[1], ...reply(a[2], a[3], a[4])));
+  };
+  win.visible = false;
+  reply = (kind, key) => [true, null, key === 'party.start' ? { code: 'ABCD-EFGH' } : undefined];
+  eq('party.start: data окна — результат', await maska.command('aura', 'party.start', {}), { ok: true, data: { code: 'ABCD-EFGH' } });
+  eq('sounds.play: без data — null', await maska.command('aura', 'sounds.play', { id: 'p1' }), { ok: true, data: null });
+  eq('...до окна дошли имя и args', asked.slice(-1), [['cmd', 'sounds.play', { id: 'p1' }]]);
+  await maska.command('aura', 'effects.off');
+  eq('без args — пустой объект', asked.slice(-1), [['cmd', 'effects.off', {}]]);
+  eq('settings.set по-прежнему: key, value, data null', [await maska.command('aura', 'settings.set', { key: 'auto', value: true }), asked.slice(-1)], [{ ok: true, data: null }, [['set', 'auto', true]]]);
+  eq('окно не показано', win.visible, false);
+  reply = () => [false, 'такого звука нет'];
+  const bad = await maska.command('aura', 'sounds.play', { id: 'нет' });
+  eq('ошибка окна — ok: false с текстом', [bad.ok, bad.error], [false, 'такого звука нет']);
+  reply = null;
+  win.webContents.send = send;
+  const sounds = { mic: true, pads: [{ id: 'p1', name: 'Бонк' }], playing: ['p1'] };
+  listeners['hub:state']({}, 'aura.evil', { x: 1 });
+  listeners['hub:state']({}, 'aura.party', [1, 2]);
+  listeners['hub:state']({}, 'aura.sounds', sounds);
+  await until(() => maskaSeen['aura.sounds']);
+  eq('hub:state: тема из списка публикуется', maskaSeen['aura.sounds'], sounds);
+  await wait(150);
+  eq('hub:state: чужая тема и не объект — нет', ['aura.evil' in maskaSeen, 'aura.party' in maskaSeen], [false, false]);
+  maska.close();
 
   // дорога к core.txt
   eq('core:info', info(), { online: true, installed: true, quitHere: true });

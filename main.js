@@ -1058,15 +1058,20 @@ let hubSeq = 0;
 const hubWaiting = new Map(); // request id → { resolve, reject, timer }
 
 // The settings live in the window, so a change is passed to it and answered from there.
-function askWindow(kind, args) {
+// kind 'set' | 'run' — a setting (key, value); 'cmd' — a command (name, args), its data comes back as the result.
+function askWindow(kind, key, value, ms = 4000) {
   return new Promise((resolve, reject) => {
     if (!win || win.isDestroyed()) return reject(new Error('окно aura.txt закрыто'));
     const id = ++hubSeq;
-    const timer = setTimeout(() => { hubWaiting.delete(id); reject(new Error('aura.txt не ответила')); }, 4000);
+    const timer = setTimeout(() => { hubWaiting.delete(id); reject(new Error('aura.txt не ответила')); }, ms);
     hubWaiting.set(id, { resolve, reject, timer });
-    win.webContents.send('hub:command', id, kind, String(args?.key || ''), args?.value);
+    win.webContents.send('hub:command', id, kind, key, value);
   });
 }
+const askSetting = (kind, args) => askWindow(kind, String(args?.key || ''), args?.value);
+// Звуки, эффекты и пати живут в окне; окно для этого не показывается. party.start ждёт сеть — дольше обычного.
+const askCommand = (name, ms) => (args) => askWindow('cmd', name, args && typeof args === 'object' && !Array.isArray(args) ? args : {}, ms);
+const HUB_STATES = new Set(['aura.sounds', 'aura.effects', 'aura.party']); // what the window may publish
 function startHub() {
   // family.wrap() добавляет к темам core.family и hub.apps, к командам — tray.run (пункты aura.txt в меню core.txt)
   hub = hubConnect(family.wrap({
@@ -1076,8 +1081,15 @@ function startHub() {
     port: Number(process.env.AURA_HUB_PORT) || undefined, // tests: a spare hub beside the real launcher
     topics: ['hub.theme'],
     commands: {
-      'settings.set': (args) => askWindow('set', args),
-      'settings.run': (args) => askWindow('run', args),
+      'settings.set': (args) => askSetting('set', args),
+      'settings.run': (args) => askSetting('run', args),
+      'sounds.play': askCommand('sounds.play'),
+      'sounds.stop': askCommand('sounds.stop'),
+      'effects.set': askCommand('effects.set'),
+      'effects.off': askCommand('effects.off'),
+      'party.start': askCommand('party.start', 30000),
+      'party.stop': askCommand('party.stop'),
+      'party.answer': askCommand('party.answer'),
       // core.txt открывает окно; со страницей «keys» — сразу на горячих клавишах
       show: (args) => {
         showWindow();
@@ -1103,12 +1115,15 @@ function startHub() {
 ipcMain.on('hub:settings', (_e, settings) => {
   if (settings && typeof settings === 'object') hub?.state('aura.settings', settings);
 });
-ipcMain.on('hub:result', (_e, id, ok, error) => {
+ipcMain.on('hub:state', (_e, topic, data) => {
+  if (HUB_STATES.has(topic) && data && typeof data === 'object' && !Array.isArray(data)) hub?.state(topic, data);
+});
+ipcMain.on('hub:result', (_e, id, ok, error, data) => {
   const w = hubWaiting.get(id);
   if (!w) return;
   hubWaiting.delete(id);
   clearTimeout(w.timer);
-  if (ok) w.resolve(null); else w.reject(new Error(String(error || 'не получилось')));
+  if (ok) w.resolve(data === undefined ? null : data); else w.reject(new Error(String(error || 'не получилось')));
 });
 ipcMain.handle('hub:theme', () => hubTheme);
 

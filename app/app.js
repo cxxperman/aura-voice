@@ -287,6 +287,7 @@ async function pollSystem() {
     if (engine.running) await restartEngine();
     pushSystem();
     renderRoute();
+    publishHubState(); // mic / canHost
   }
   renderSystem();
   if (engine.running && !recording && !tuning && performance.now() > statusHold) liveStatus();
@@ -506,6 +507,70 @@ function publishHubSettings() {
     window.auraSystem.hubSettings(now);
   }, 120);
 }
+// Звуки, эффекты и пати для других приложений (поповер Maska, например): каждая тема целиком, только когда изменилась.
+function hubStatesNow() {
+  const host = partyRole === 'host';
+  const people = [...partyPeople];
+  return {
+    'aura.sounds': { mic: !!sys.installed, pads: state.pads.map((p) => ({ id: String(p.id), name: String(p.name) })), playing: [...new Set(padPlaying.values())] },
+    'aura.effects': { mic: !!sys.installed, active: state.fx === 'none' ? null : state.fx, items: Object.entries(VOICES).filter(([id]) => id !== 'none').map(([id, v]) => ({ id, name: v.name })) },
+    'aura.party': {
+      enabled: !!state.party, canHost: !!sys.installed, role: partyRole || null, code: host ? partyCodeNow : null,
+      people: people.filter(([, p]) => p.state === 'in' || p.state === 'on').length,
+      asking: host ? people.filter(([, p]) => p.state === 'asking').map(([id, p]) => ({ id, name: p.name })) : [],
+    },
+  };
+}
+let hubStateTimer = 0;
+const hubStateLast = {};
+function publishHubState() {
+  if (!window.auraSystem?.hubState || TEST || PROBE || DATA) return;
+  clearTimeout(hubStateTimer);
+  hubStateTimer = setTimeout(() => {
+    for (const [topic, data] of Object.entries(hubStatesNow())) {
+      const text = JSON.stringify(data);
+      if (text === hubStateLast[topic]) continue;
+      hubStateLast[topic] = text;
+      window.auraSystem.hubState(topic, data);
+    }
+  }, 120);
+}
+// Команды хаба к звукам, эффектам и пати — то же, что кнопки в окне; окно при этом не показывается.
+async function runHubCommand(name, args) {
+  if (name === 'sounds.play') {
+    const pad = args.id != null && state.pads.find((p) => String(p.id) === String(args.id));
+    if (!pad) throw new Error('такого звука нет');
+    const error = await playPad(pad);
+    if (error) throw new Error(error);
+    return null;
+  }
+  if (name === 'sounds.stop') return stopPads(), null;
+  if (name === 'effects.set') {
+    const id = args.id ?? 'none';
+    if (typeof id !== 'string' || !VOICES[id]) throw new Error('такого эффекта нет');
+    return selectVoice(id), null;
+  }
+  if (name === 'effects.off') return selectVoice('none'), null;
+  if (name === 'party.start') {
+    if (partyRole) throw new Error('пати уже идёт');
+    if (!sys.installed) throw new Error('aura.txt не встроена в микрофон');
+    if (!state.party) await setPartyOn(true);
+    const res = await startPartyHost();
+    if (res.error) throw new Error(res.error);
+    return { code: res.code };
+  }
+  if (name === 'party.stop') {
+    if (!partyRole) throw new Error('пати не идёт');
+    await leaveParty();
+    return null;
+  }
+  if (name === 'party.answer') {
+    if (partyRole !== 'host' || partyPeople.get(args.id)?.state !== 'asking') throw new Error('такого человека нет');
+    answerGuest(args.id, !!args.ok);
+    return null;
+  }
+  throw new Error('такой команды нет');
+}
 async function applyHubSetting(key, value) {
   if (key === 'power') return setPower(!!value);
   if (key === 'preset') {
@@ -547,6 +612,14 @@ function startHubSettings() {
   const bridge = window.auraSystem;
   if (!bridge?.onHubCommand) return;
   bridge.onHubCommand(async (id, kind, key, value) => {
+    if (kind === 'cmd') {
+      try {
+        bridge.hubResult(id, true, null, await runHubCommand(key, value || {}));
+      } catch (e) {
+        bridge.hubResult(id, false, String(e?.message || e));
+      }
+      return publishHubState();
+    }
     try {
       if (kind !== 'set') throw new Error('такой команды нет');
       await applyHubSetting(key, value);
@@ -562,7 +635,9 @@ function startHubSettings() {
   // Anything changed in this window by hand reaches the launcher too
   document.addEventListener('change', publishHubSettings);
   setInterval(publishHubSettings, 3000); // and what changes without a click: the module appearing, a select being filled
+  setInterval(publishHubState, 3000);
   publishHubSettings();
+  publishHubState();
 }
 
 // Keep the tray icon and its menu in step with the window.
@@ -1115,6 +1190,7 @@ sampleBtn.addEventListener('click', async () => {
 const padsEl = $('#pads');
 let padContext = null;
 const padSources = new Set(); // everything currently playing to the user's ears
+const padPlaying = new Map(); // source → pad id: which pads are sounding now (previews are not here), for aura.sounds
 
 // The key shown on a pad: its own, or Ctrl+Alt+digit for the first nine.
 const padKey = (pad, index) => pad.key || (index < 9 ? `Ctrl+Alt+${index + 1}` : '');
@@ -1235,6 +1311,7 @@ function padsChanged() {
   renderPads();
   renderCatalog();
   syncHotkeys();
+  publishHubState();
 }
 
 /* A small menu for one pad: rename, give it a key, remove it. */
@@ -1326,6 +1403,8 @@ function stopLocalPad() {
     } catch {}
   }
   padSources.clear();
+  padPlaying.clear();
+  publishHubState();
 }
 
 // Any audio file → mono 48 kHz, at most 20 s, normalised so every sound is equally loud.
@@ -1379,20 +1458,35 @@ async function padSamples(pad) {
 
 // The soundboard is its own thing: it does not need voice processing switched on. The module
 // mixes the sound into the microphone whenever any program is recording from it.
+// Returns what went wrong reading the file (for the hub's sounds.play), or null.
 async function playPad(pad) {
   let mono;
   try {
     mono = await padSamples(pad);
   } catch {
-    return flash('Не получилось прочитать этот файл как звук.', true);
+    flash('Не получилось прочитать этот файл как звук.', true);
+    return 'не получилось прочитать файл этого звука';
   }
-  if (!mono) return flash('Файл этого звука не найден.', true);
-  playLocal(mono);
-  if (!sys.installed) return flash('Звук слышите только вы. Чтобы он шёл в микрофон, встройте модуль в «Настройках».', 'warn');
-  if (!(await window.auraSystem.writeClip(mono))) return flash('Не удалось передать звук модулю.', true);
+  if (!mono) {
+    flash('Файл этого звука не найден.', true);
+    return 'файл этого звука не найден';
+  }
+  let source = null;
+  const ended = () => {
+    padPlaying.delete(source);
+    publishHubState();
+  };
+  playLocal(mono, ended).then((s) => {
+    source = s;
+    padPlaying.set(s, String(pad.id));
+    publishHubState();
+  });
+  if (!sys.installed) return flash('Звук слышите только вы. Чтобы он шёл в микрофон, встройте модуль в «Настройках».', 'warn'), null;
+  if (!(await window.auraSystem.writeClip(mono))) return flash('Не удалось передать звук модулю.', true), null;
   state.playId++;
   save();
   pushSystem();
+  return null;
 }
 
 $('#padAdd').addEventListener('click', async () => {
@@ -1413,12 +1507,13 @@ $('#padClown').addEventListener('click', async () => {
   padsChanged();
   flash(`Перенесено звуков из Clownfish: ${fresh.length}`, false, 5000);
 });
-$('#padStop').addEventListener('click', () => {
+function stopPads() {
   state.playStop++;
   save();
   pushSystem();
   stopLocalPad();
-});
+}
+$('#padStop').addEventListener('click', stopPads);
 {
   const volume = $('#padVolume');
   volume.value = state.clipGain;
@@ -1539,6 +1634,7 @@ function selectVoice(id) {
   renderVoices();
   liveStatus();
   reportToTray();
+  publishHubState();
 }
 
 const voicesEl = $('#voices');
@@ -2874,8 +2970,8 @@ function renderPeople() {
         actions.append(b);
       };
       if (p.state === 'asking') {
-        button('Отказать', 'pill small', () => { window.auraSystem.partyAnswer(id, false); partyPeople.delete(id); renderPeople(); });
-        button('Впустить', 'pill small prominent', () => window.auraSystem.partyAnswer(id, true));
+        button('Отказать', 'pill small', () => answerGuest(id, false));
+        button('Впустить', 'pill small prominent', () => answerGuest(id, true));
       } else {
         button('Убрать', 'pill small', () => window.auraSystem.partyKick(id));
       }
@@ -2883,6 +2979,15 @@ function renderPeople() {
       return row;
     })
   );
+  publishHubState(); // every change of partyPeople / partyRole ends here
+}
+// Впустить — люди обновятся сами, событием member; отказать — убрать из списка сразу
+function answerGuest(id, ok) {
+  window.auraSystem.partyAnswer(id, ok);
+  if (!ok) {
+    partyPeople.delete(id);
+    renderPeople();
+  }
 }
 function renderPartyNet(status = '') {
   $('#partyIdle').hidden = !!partyRole;
@@ -2938,18 +3043,27 @@ const newPartyRtc = () =>
   });
 $('#partyName').value = state.partyName || '';
 $('#partyName').addEventListener('change', (e) => { state.partyName = e.target.value.trim().slice(0, 24); save(); });
-$('#partyCreate').addEventListener('click', async () => {
-  if (!sys.installed) return partyNote('Голоса друзей попадают в микрофон через модуль: встройте его в Настройках.', true);
+// The button and the hub's party.start: { code } or { error }
+async function startPartyHost() {
+  if (!sys.installed) {
+    partyNote('Голоса друзей попадают в микрофон через модуль: встройте его в Настройках.', true);
+    return { error: 'aura.txt не встроена в микрофон' };
+  }
   partyNote('Создаю пати…');
   const res = await window.auraSystem.partyHost();
-  if (res.error) return partyNote(res.error, true);
+  if (res.error) {
+    partyNote(res.error, true);
+    return res;
+  }
   partyRole = 'host';
   partyCodeNow = res.code;
   partyRtc = newPartyRtc();
   partyRtc.setSource(partyStream);
   partyNote(partyStream ? '' : 'Откройте окно пати выше — друзья будут слышать его звук.');
   renderPartyNet();
-});
+  return { code: res.code };
+}
+$('#partyCreate').addEventListener('click', () => startPartyHost());
 $('#partyCopy').addEventListener('click', () => navigator.clipboard.writeText(partyCodeNow).then(() => flash('Код скопирован')));
 $('#partyJoin').addEventListener('click', async () => {
   const name = $('#partyName').value.trim() || 'Гость';
@@ -2993,11 +3107,14 @@ $('#partyCheck').addEventListener('click', async (e) => {
   e.target.disabled = false;
 });
 $('#partyCode').addEventListener('keydown', (e) => e.key === 'Enter' && $('#partyJoin').click());
-$('#partyLeave').addEventListener('click', () => {
+// The button and the hub's party.stop
+function leaveParty() {
   partyRtc?.micStream?.getTracks().forEach((t) => t.stop());
-  partyStop();
+  const done = partyStop();
   partyNote('');
-});
+  return done;
+}
+$('#partyLeave').addEventListener('click', () => leaveParty());
 window.auraSystem?.onParty?.((name, p) => {
   if (name === 'request') { partyPeople.set(p.id, { name: p.name, state: 'asking' }); renderPeople(); flash(`${p.name} хочет войти в пати`); if (windowVisible) showTab('party'); }
   if (name === 'member') { partyPeople.set(p.id, { name: p.name, state: 'in' }); renderPeople(); partyRtc?.addGuest(p.id); }
@@ -3017,13 +3134,16 @@ function applyPartySwitch() {
   $('#partyOn').checked = !!state.party;
   if (!state.party && partyTab.getAttribute('aria-selected') === 'true') showTab('voice');
 }
-$('#partyOn').addEventListener('change', async (e) => {
-  state.party = e.target.checked;
+// The switch in Settings, and party.start when the section is off
+async function setPartyOn(on) {
+  state.party = on;
   save();
   if (!state.party) { partyAppPid = 0; await window.auraSystem.partyCaptureStop(); stopPartyCapture(); await window.auraSystem.partyClose(); if (partyRole) await partyStop(); }
   applyPartySwitch();
   pushSystem();
-});
+  publishHubState();
+}
+$('#partyOn').addEventListener('change', (e) => setPartyOn(e.target.checked));
 $('#partyForget').addEventListener('click', async (e) => {
   e.preventDefault();
   stopPartyCapture();
