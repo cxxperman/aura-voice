@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('auraSystem', {
   partyClose: () => ipcRenderer.invoke('party:close'),
   partyState: () => ipcRenderer.invoke('party:state'),
   partyForget: () => ipcRenderer.invoke('party:forget'),
+  partyDiscordMode: (on) => ipcRenderer.invoke('party:discord-mode', on), // → { available, on, site, found, hearing }
+  partyDiscordState: () => ipcRenderer.invoke('party:discord-state'),
   partyBeep: () => ipcRenderer.invoke('party:beep'),
   partyMix: (pcm) => ipcRenderer.send('party:mix', pcm),
   partyApps: () => ipcRenderer.invoke('party:apps'),

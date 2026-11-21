@@ -674,12 +674,18 @@ ipcMain.handle('ai:convert', async (_e, pcm, id, st, speaker) => {
 /* ───── Party ─────
  * Talking to someone together: a site (any site) runs in a window of its own, its sound can be
  * taken by the Aura window — to be passed on to friends — and what friends say is added to the
- * microphone by the module (party-mix.js). The page in the party window is never touched:
- * nothing is injected into it, nothing about the browser is disguised. It has a profile of its
- * own, apart from Aura's, and the one thing it may be granted is the microphone, asked per site. */
+ * microphone by the module (party-mix.js). Normally the page in the party window is never touched:
+ * nothing is injected into it, nothing about the browser is disguised. The one exception is the
+ * "party through Discord" mode, switched on by the user: then the window gets party-preload.js,
+ * which swaps the page's microphone for "the real microphone + Discord's sound" (so the person on
+ * the site hears the call, while Discord itself still gets only the voice), and changes nothing else.
+ * The window has a profile of its own, apart from Aura's, and the one thing it may be granted is
+ * the microphone, asked per site. */
 const { Mix } = require('./party-mix.js');
+const { DISCORD_NAMES, isDiscord, parseTasklist, parseCim, pickDiscordRoot, FrameFeed } = require('./party-discord.js');
 let partyWin = null;
 let partyMix = null;
+let partyDiscord = false; // "party through Discord": the window says, on start and on every change
 const partyMicAllowed = new Set(); // origins the user said yes to, this run only
 const partySession = () => session.fromPartition('persist:party');
 const originOf = (url) => {
@@ -711,27 +717,60 @@ ipcMain.handle('party:open', (_e, address) => {
   if (!url) return { error: 'Введите адрес сайта.' };
   if (!/^[a-z]+:\/\//i.test(url)) url = 'https://' + url;
   if (!originOf(url)) return { error: 'Нужен адрес сайта с https://' };
-  if (!partyWin || partyWin.isDestroyed()) {
-    partyPermissions();
-    partyWin = new BrowserWindow({
-      width: 1100, height: 820, title: 'Aura — пати', backgroundColor: '#111114', icon: path.join(__dirname, 'assets', 'icon.ico'),
-      webPreferences: { session: partySession(), sandbox: true, contextIsolation: true, nodeIntegration: false },
-    });
-    partyWin.removeMenu();
-    partyWin.webContents.setWindowOpenHandler(({ url: next }) => {
-      if (originOf(next)) partyWin.loadURL(next); // links that want a new window open in this one
-      return { action: 'deny' };
-    });
-    partyWin.on('closed', () => (partyWin = null));
-  }
+  if (!partySiteOpen()) makePartyWin();
   partyWin.loadURL(url);
   partyWin.show();
+  discordSync();
   return { ok: true };
 });
+const partySiteOpen = () => !!partyWin && !partyWin.isDestroyed();
+// The preload is fixed when a window is made: the mode decides it, and a change of mode makes the window anew.
+function makePartyWin(bounds, show = true) {
+  partyPermissions();
+  const discordMode = partyDiscord;
+  const w = new BrowserWindow({
+    width: 1100, height: 820, ...(bounds || {}), show, title: 'Aura — пати', backgroundColor: '#111114', icon: path.join(__dirname, 'assets', 'icon.ico'),
+    webPreferences: {
+      session: partySession(), sandbox: true, contextIsolation: true, nodeIntegration: false,
+      // only in this mode: the microphone of the page and of its frames (calls often sit in an iframe) — party-preload.js
+      ...(discordMode ? { preload: path.join(__dirname, 'party-preload.js'), nodeIntegrationInSubFrames: true } : {}),
+    },
+  });
+  w.discordMode = discordMode;
+  w.removeMenu();
+  w.webContents.setWindowOpenHandler(({ url: next }) => {
+    if (originOf(next)) w.loadURL(next); // links that want a new window open in this one
+    return { action: 'deny' };
+  });
+  w.on('closed', () => {
+    if (partyWin !== w) return;
+    partyWin = null;
+    discordSync();
+  });
+  partyWin = w;
+  return w;
+}
 ipcMain.handle('party:close', () => {
   if (partyWin && !partyWin.isDestroyed()) partyWin.close();
   return true;
 });
+// The mode, from the window. With the party window open its page loads again — now with the preload, or without it.
+ipcMain.handle('party:discord-mode', (_e, on) => {
+  partyDiscord = !!on;
+  if (partySiteOpen() && partyWin.discordMode !== partyDiscord) {
+    const old = partyWin;
+    const url = old.webContents.getURL();
+    const shown = old.isVisible();
+    const bounds = old.getBounds();
+    partyWin = null;
+    old.destroy();
+    makePartyWin(bounds, shown);
+    if (originOf(url)) partyWin.loadURL(url);
+  }
+  discordSync();
+  return discordStatus();
+});
+ipcMain.handle('party:discord-state', () => discordStatus());
 ipcMain.handle('party:state', () => (partyWin && !partyWin.isDestroyed() ? { open: true, url: partyWin.webContents.getURL(), title: partyWin.webContents.getTitle().slice(0, 80) } : { open: false }));
 ipcMain.handle('party:forget', async () => { // everything the party window's profile holds: sign-ins, cookies, cache
   if (partyWin && !partyWin.isDestroyed()) partyWin.close();
@@ -850,6 +889,95 @@ ipcMain.handle('party:capture', (_e, pid) => {
 ipcMain.handle('party:capture-stop', () => {
   stopPartyCapture();
   return true;
+});
+
+/* "Party through Discord": Discord's sound, for the page in the party window and nothing else.
+ * A capture of its own (AuraCapture.exe once more), beside the one above: either can run without the other.
+ * It runs while the mode is on and the party window is open. Discord is looked for every few seconds
+ * while it is not being heard: tasklist (cheap) for whether it runs, and once per Discord start one
+ * PowerShell query for which of its processes is the root of the tree (party-discord.js). */
+const discordFeed = new FrameFeed('party:discord-pcm');
+const discord = { child: null, root: 0, found: false, hearing: false, timer: null, looking: false, failed: new Map(), told: '' };
+const discordStatus = () => ({ available: fs.existsSync(captureTool()), on: partyDiscord, site: partySiteOpen(), found: discord.found, hearing: discord.hearing });
+function tellDiscord() {
+  const s = discordStatus();
+  const text = JSON.stringify(s);
+  if (text === discord.told) return;
+  discord.told = text;
+  partyTell('discord', s);
+}
+function discordStop() {
+  clearInterval(discord.timer);
+  discord.timer = null;
+  const child = discord.child;
+  discord.child = null;
+  child?.kill();
+  discord.found = discord.hearing = false;
+  discordFeed.clear();
+}
+function discordSync() {
+  if (partyDiscord && partySiteOpen() && fs.existsSync(captureTool())) {
+    if (!discord.timer) {
+      discord.timer = setInterval(discordLook, 5000);
+      discordLook();
+    }
+  } else discordStop();
+  tellDiscord();
+}
+function discordLook() {
+  if (discord.child || discord.looking) return;
+  discord.looking = true;
+  execFile('tasklist.exe', ['/FI', 'IMAGENAME eq Discord*', '/FO', 'CSV', '/NH'], { windowsHide: true, encoding: 'utf8', timeout: 5000 }, (err, out) => {
+    const running = err ? [] : parseTasklist(out).filter((p) => isDiscord(p.name));
+    discord.found = running.length > 0;
+    tellDiscord();
+    if (!discord.found) return void (discord.looking = false);
+    const start = (pid) => {
+      discord.looking = false;
+      discord.root = pid;
+      if (!pid || discord.child || !discord.timer || Date.now() < (discord.failed.get(pid) || 0)) return;
+      discordCapture(pid);
+    };
+    if (discord.root && running.some((p) => p.pid === discord.root)) return start(discord.root);
+    const filter = DISCORD_NAMES.map((n) => `Name='${n}'`).join(' or ');
+    const script = `Get-CimInstance Win32_Process -Filter "${filter}" | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress`;
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, encoding: 'utf8', timeout: 8000 }, (err2, out2) => start(err2 ? 0 : pickDiscordRoot(parseCim(out2))));
+  });
+}
+function discordCapture(pid) {
+  const child = spawn(captureTool(), [String(pid)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  discord.child = child;
+  const started = Date.now();
+  let rest = Buffer.alloc(0);
+  child.stderr?.on('data', (d) => {
+    if (discord.child === child && /capturing/.test(String(d))) {
+      discord.hearing = true;
+      tellDiscord();
+    }
+  });
+  child.stdout?.on('data', (chunk) => {
+    const all = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+    const whole = all.length - (all.length % 4);
+    rest = all.subarray(whole);
+    if (whole && discord.child === child && discordFeed.size) discordFeed.send(all.buffer.slice(all.byteOffset, all.byteOffset + whole));
+  });
+  child.on('error', () => {});
+  child.on('exit', () => {
+    if (discord.child !== child) return;
+    // Discord closed (or restarted): look again on the next tick. Did not even start — not this process for a while.
+    if (!discord.hearing || Date.now() - started < 3000) discord.failed.set(pid, Date.now() + 30000);
+    discord.child = null;
+    discord.hearing = false;
+    tellDiscord();
+  });
+}
+// A page (or a frame in it) of the party window asks for Discord's sound once it opens the microphone.
+const fromPartyWin = (e) => partySiteOpen() && e.sender === partyWin.webContents && e.senderFrame;
+ipcMain.on('party:discord-want', (e) => {
+  if (partyWin?.discordMode && fromPartyWin(e)) discordFeed.want(e.senderFrame);
+});
+ipcMain.on('party:discord-unwant', (e) => {
+  if (fromPartyWin(e)) discordFeed.unwant(e.senderFrame);
 });
 
 // Sound for the microphone (friends' voices, mixed, mono 48 kHz float32).
@@ -1090,6 +1218,8 @@ function startHub() {
       'party.start': askCommand('party.start', 30000),
       'party.stop': askCommand('party.stop'),
       'party.answer': askCommand('party.answer'),
+      'party.discord': askCommand('party.discord'),
+      'party.site': askCommand('party.site'),
       // core.txt открывает окно; со страницей «keys» — сразу на горячих клавишах
       show: (args) => {
         showWindow();
@@ -1349,6 +1479,7 @@ app.on('second-instance', showWindow);
 app.on('before-quit', () => {
   quitting = true;
   trayGate.stop(); // связь сейчас закроется — свой значок из-за этого уже не появляется
+  discordStop(); // захват звука Discord — свой процесс AuraCapture, его не оставлять
   hub?.close(); // says goodbye, so the launcher drops Aura's settings at once
 });
 

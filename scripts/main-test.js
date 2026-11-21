@@ -98,13 +98,16 @@ class FakeNotification {
   show() { toasts.push(this); }
 }
 class FakeWindow {
-  constructor() {
-    this.visible = false; this.minimized = false; this.destroyed = false; this.handlers = {}; this.sent = [];
-    this.webContents = { send: (...a) => this.sent.push(a), once() {}, on() {}, setZoomFactor() {}, executeJavaScript: async () => null };
+  constructor(options) {
+    this.options = options || {}; this.url = '';
+    this.visible = this.options.show !== false && !!this.options.webPreferences?.session; this.minimized = false; this.destroyed = false; this.handlers = {}; this.sent = [];
+    this.webContents = { send: (...a) => this.sent.push(a), once() {}, on() {}, setZoomFactor() {}, executeJavaScript: async () => null, setWindowOpenHandler() {}, getURL: () => this.url, getTitle: () => '' };
     wins.push(this);
     if (calls.windowAfterAumid === null) calls.windowAfterAumid = calls.aumid.length > 0;
   }
   removeMenu() {} setMinimumSize() {} setContentSize() {} loadFile() {}
+  loadURL(u) { this.url = u; } getBounds() { return { x: 10, y: 20, width: 900, height: 700 }; } // окно пати
+  close() { this.destroy(); } destroy() { if (this.destroyed) return; this.destroyed = true; this.emit('closed'); }
   once(ev, fn) { if (ev === 'ready-to-show') this.ready = fn; }
   on(ev, fn) { (this.handlers[ev] = this.handlers[ev] || []).push(fn); }
   emit(ev, ...args) { for (const fn of this.handlers[ev] || []) fn(...args); }
@@ -123,7 +126,10 @@ const electron = {
     setLoginItemSettings(o) { calls.login.push(o); loginOn = !!o.openAtLogin; },
   },
   BrowserWindow: FakeWindow,
-  session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDisplayMediaRequestHandler() {} } },
+  session: {
+    defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, setDisplayMediaRequestHandler() {} },
+    fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, clearStorageData: async () => {}, clearCache: async () => {} }), // окно пати
+  },
   ipcMain: { handle(ch, fn) { handles[ch] = fn; }, on(ch, fn) { listeners[ch] = fn; } },
   Tray: FakeTray,
   Menu: { buildFromTemplate: (t) => t },
@@ -317,7 +323,7 @@ Module._load = function (request, parent) {
   const maskaSeen = {};
   const maska = connect({ app: 'maska', name: 'Maska', port: server.port, topics: ['hub.apps', 'aura.*'], onState: (t, d) => { maskaSeen[t] = d; } });
   await until(() => maska.online && maskaSeen['hub.apps']);
-  const NEW_COMMANDS = ['sounds.play', 'sounds.stop', 'effects.set', 'effects.off', 'party.start', 'party.stop', 'party.answer'];
+  const NEW_COMMANDS = ['sounds.play', 'sounds.stop', 'effects.set', 'effects.off', 'party.start', 'party.stop', 'party.answer', 'party.discord', 'party.site'];
   const auraApp = (maskaSeen['hub.apps'] || []).find((a) => a.app === 'aura');
   eq('hub.apps: aura умеет звуки, эффекты, пати', NEW_COMMANDS.filter((c) => auraApp && auraApp.commands.includes(c)), NEW_COMMANDS);
   const asked = [];
@@ -334,6 +340,8 @@ Module._load = function (request, parent) {
   eq('party.start: data окна — результат', await maska.command('aura', 'party.start', {}), { ok: true, data: { code: 'ABCD-EFGH' } });
   eq('sounds.play: без data — null', await maska.command('aura', 'sounds.play', { id: 'p1' }), { ok: true, data: null });
   eq('...до окна дошли имя и args', asked.slice(-1), [['cmd', 'sounds.play', { id: 'p1' }]]);
+  eq('party.discord: до окна, data null', [await maska.command('aura', 'party.discord', { on: true }), asked.slice(-1)], [{ ok: true, data: null }, [['cmd', 'party.discord', { on: true }]]]);
+  eq('party.site: до окна, data null', [await maska.command('aura', 'party.site', { open: true, url: 'example.com' }), asked.slice(-1)], [{ ok: true, data: null }, [['cmd', 'party.site', { open: true, url: 'example.com' }]]]);
   await maska.command('aura', 'effects.off');
   eq('без args — пустой объект', asked.slice(-1), [['cmd', 'effects.off', {}]]);
   eq('settings.set по-прежнему: key, value, data null', [await maska.command('aura', 'settings.set', { key: 'auto', value: true }), asked.slice(-1)], [{ ok: true, data: null }, [['set', 'auto', true]]]);
@@ -352,6 +360,41 @@ Module._load = function (request, parent) {
   await wait(150);
   eq('hub:state: чужая тема и не объект — нет', ['aura.evil' in maskaSeen, 'aura.party' in maskaSeen], [false, false]);
   maska.close();
+
+  // окно пати: preload (подмена микрофона) — только в режиме «Пати через Discord»; режим main.js узнаёт от окна
+  const partyWins = () => wins.filter((w) => w.options.webPreferences && w.options.webPreferences.session);
+  const prefs = (w) => [path.basename(w.options.webPreferences.preload || '') || null, !!w.options.webPreferences.nodeIntegrationInSubFrames, w.options.webPreferences.sandbox, w.options.webPreferences.contextIsolation];
+  eq('party:discord-mode выкл', (await handles['party:discord-mode']({}, false)).on, false);
+  eq('party:open: неверный адрес', await handles['party:open']({}, 'http://example.com'), { error: 'Нужен адрес сайта с https://' });
+  eq('party:open', await handles['party:open']({}, 'example.com/chat'), { ok: true });
+  let pw = partyWins().slice(-1)[0];
+  eq('режим выключен: у окна пати нет preload', [partyWins().length, prefs(pw), pw.url], [1, [null, false, true, true], 'https://example.com/chat']);
+  const st = await handles['party:discord-mode']({}, true);
+  const pw2 = partyWins()[1];
+  eq('режим включён: окно сделано заново, тот же адрес и место, с preload и во фреймах', [partyWins().length, pw.destroyed, pw2 && prefs(pw2), pw2 && pw2.url, pw2 && pw2.options.width], [2, true, ['party-preload.js', true, true, true], 'https://example.com/chat', 900]);
+  eq('party:discord-mode: состояние', [st.on, st.site, st.hearing], [true, true, false]);
+  await handles['party:discord-mode']({}, true);
+  eq('тот же режим ещё раз — окно не пересоздаётся', partyWins().length, 2);
+  await handles['party:discord-mode']({}, false);
+  eq('режим снова выключен: окно без preload', [partyWins().length, pw2.destroyed, prefs(partyWins()[2])], [3, true, [null, false, true, true]]);
+  await handles['party:discord-mode']({}, true);
+  await handles['party:close']();
+  eq('окно закрыто: site false', (await handles['party:discord-state']()).site, false);
+  await handles['party:open']({}, 'example.com');
+  const pw3 = partyWins().slice(-1)[0];
+  eq('открыто в режиме: сразу с preload', prefs(pw3)[0], 'party-preload.js');
+  listeners['party:discord-want']({ sender: {}, senderFrame: { processId: 7, routingId: 1 } }); // не из окна пати — мимо
+  await wait(50);
+  eq('Discord не найден (tasklist не ответил): AuraCapture не запускается', [spawned.filter((x) => /AuraCapture/i.test(x[0])), (await handles['party:discord-state']()).found], [[], false]);
+  eq('окну Aura сообщено о режиме', win.sent.filter((x) => x[0] === 'party:event' && x[1] === 'discord').slice(-1).map((x) => [x[2].on, x[2].site]), [[true, true]]);
+  await handles['party:discord-mode']({}, false);
+  await handles['party:close']();
+  // какой процесс Discord слушать: корень дерева (party-discord.js)
+  const pd = require(path.join(repo, 'party-discord.js'));
+  const listed = pd.parseTasklist('"System","4","Services","0","1 K"\r\n"Discord.exe","5100","Console","1","90 K"\r\n"Discord.exe","5200","Console","1","90 K"\r\n"DiscordPTB.exe","7000","Console","1","9 K"\r\n');
+  eq('tasklist: Discord найден', listed.filter((p) => pd.isDiscord(p.name)).map((p) => p.pid), [5100, 5200, 7000]);
+  const cim = pd.parseCim(JSON.stringify([{ ProcessId: 5200, ParentProcessId: 5100, Name: 'Discord.exe' }, { ProcessId: 5100, ParentProcessId: 4000, Name: 'Discord.exe' }, { ProcessId: 5300, ParentProcessId: 5100, Name: 'Discord.exe' }, { ProcessId: 7000, ParentProcessId: 6000, Name: 'DiscordPTB.exe' }]));
+  eq('корень дерева Discord, обычный раньше PTB', [pd.pickDiscordRoot(cim), pd.pickDiscordRoot(cim.filter((p) => p.name !== 'Discord.exe')), pd.pickDiscordRoot(pd.parseCim('{"ProcessId":9,"ParentProcessId":1,"Name":"DiscordCanary.exe"}')), pd.pickDiscordRoot(pd.parseCim('не json'))], [5100, 7000, 9, 0]);
 
   // дорога к core.txt
   eq('core:info', info(), { online: true, installed: true, quitHere: true });

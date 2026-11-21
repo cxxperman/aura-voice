@@ -9,6 +9,7 @@
     "icons": "node scripts/make-icon.js",
     "test:family": "node scripts/family-test.js",
     "test:main": "node scripts/main-test.js",
+    "test:party-inject": "node scripts/party-inject-test.js",
     "dist": "electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
@@ -28,6 +29,8 @@
       "ai-convert.js",
       "ai-worker.js",
       "party-mix.js",
+      "party-discord.js",
+      "party-preload.js",
       "ai-live.js",
       "ai-templates/**",
       "ai-pth.js",

@@ -128,9 +128,10 @@
           <div class="field"><span id="partyTitle">Окно закрыто</span><span class="party-actions"><button type="button" class="pill" id="partyClose" hidden>Закрыть</button><button type="button" class="pill prominent" id="partyOpen">Открыть</button></span></div>
           <label class="field"><span>Или звук программы</span><select id="partyApp"><option value="">Не выбрана — источник: окно пати</option></select></label>
           <div class="field"><span>Что услышат друзья</span><div class="bar party-bar"><i id="partyLevel"></i></div></div>
+          <label class="switch" for="partyDiscord"><span><b>Пати через Discord</b><small>Собеседник на сайте слышит ваш голос вместе со звонком Discord. Друзьям в Discord включите демонстрацию окна пати со звуком — так они услышат сайт. Без кода и без прямого соединения: IP-адреса никто не видит. При переключении страница в окне пати загрузится заново.</small><small class="party-discord-status" id="partyDiscordStatus" role="status" hidden></small></span><input type="checkbox" id="partyDiscord"><i></i></label>
         </div>
-        <p class="footnote">Сайт открывается в отдельном окне Aura как есть: в страницу ничего не добавляется. В нём свой вход и свои куки, отдельно от вашего браузера. Собеседник на сайте слышит ваш микрофон — с обработкой Aura, звуками и голосами друзей.</p>
-        <div class="section-title"><span>Друзья</span></div>
+        <p class="footnote">Сайт открывается в отдельном окне Aura, со своим входом и своими куки, отдельно от вашего браузера. Обычно страница не трогается: в неё ничего не добавляется. В режиме «Пати через Discord» Aura подменяет на странице микрофон, чтобы сайт слышал звонок, и больше ничего не меняет. Собеседник на сайте слышит ваш микрофон — с обработкой Aura, звуками и голосами друзей.</p>
+        <div class="section-title"><span>Друзья</span><small class="warn">небезопасно: участники видят IP-адреса друг друга</small></div>
         <div class="group devices">
           <div class="field" id="partyIdle">
             <input type="text" class="party-url party-name" id="partyName" maxlength="24" placeholder="Ваше имя" spellcheck="false" autocomplete="off">
@@ -142,7 +143,9 @@
           </div>
           <div id="partyMembers"></div>
         </div>
-        <p class="footnote">Создайте пати и отправьте код друзьям — они входят по нему из своей Aura, а вы решаете, кого впустить. Друзья слышат то, что звучит в окне пати; их голоса попадают в ваш микрофон. Друг друга вы слышите как обычно — в Discord или в комнате. Звук идёт между компьютерами напрямую и зашифрован; участники видят IP-адреса друг друга.</p>
+        <p class="footnote warn" id="partyCodeOff" hidden>Пока включена «Пати через Discord», пати по коду недоступна. Чтобы создать пати или войти в неё, выключите этот режим в «Окне пати».</p>
+        <p class="footnote">Создайте пати и отправьте код друзьям — они входят по нему из своей Aura, а вы решаете, кого впустить. Друзья слышат то, что звучит в окне пати; их голоса попадают в ваш микрофон. Друг друга вы слышите как обычно — в Discord или в комнате.</p>
+        <p class="footnote"><b>Пати по коду небезопасна.</b> Компьютеры соединяются напрямую, поэтому каждый участник видит IP-адреса остальных. Звук зашифрован, но адрес не скрыть. Впускайте только тех, кому доверяете.</p>
         <div class="section-title"><span>Проверка</span></div>
         <div class="group take">
           <div><b>Сигнал в микрофон</b><small>Два коротких тона уходят в микрофон тем же путём, каким пойдут голоса друзей. Их услышит любая программа, которая сейчас слушает микрофон.</small></div>

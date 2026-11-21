@@ -514,6 +514,10 @@ kbd.failed { background: var(--red); color: #fff; }
 #partyStatus { max-width: none !important; font-variant-numeric: tabular-nums; }
 #partyStatus b { font-weight: 600; letter-spacing: 0.06em; }
 .party-bar { flex: 0 1 300px; }
+/* «Пати через Discord»: что сейчас с режимом — под пояснением, зелёным, когда сайт слышит звонок */
+.switch small.party-discord-status { margin-top: 4px; color: var(--label-2); }
+.switch small.party-discord-status.ok { color: var(--green); }
+.switch small.party-discord-status[hidden] { display: none; }
 .tabs button[hidden] { display: none; }
 
 /* ───────── Recordings page ───────── */

@@ -112,8 +112,9 @@ const DEFAULTS = {
   dehum: false, // notch out 50 Hz mains hum
   autoUpdate: true, // ask GitHub for a newer release at start
   party: false, // the party section, off until switched on in Settings
-  partyUrl: '',
+  partyUrl: '', // the last site opened in the party window (the hub's party.site opens it again)
   partyName: '',
+  partyDiscord: false, // «Пати через Discord»: the site hears the Discord call (mixed inside its page, party-preload.js)
   aiVoice: '', // the chosen AI voice (id of an imported model)
   aiPitch: 0, // semitones for AI conversion
   aiSpeaker: 50, // which of the open model's timbres
@@ -516,8 +517,11 @@ function hubStatesNow() {
     'aura.effects': { mic: !!sys.installed, active: state.fx === 'none' ? null : state.fx, items: Object.entries(VOICES).filter(([id]) => id !== 'none').map(([id, v]) => ({ id, name: v.name })) },
     'aura.party': {
       enabled: !!state.party, canHost: !!sys.installed, role: partyRole || null, code: host ? partyCodeNow : null,
+      direct: true, // пати по коду: компьютеры соединяются напрямую, участники видят IP-адреса друг друга
       people: people.filter(([, p]) => p.state === 'in' || p.state === 'on').length,
       asking: host ? people.filter(([, p]) => p.state === 'asking').map(([id, p]) => ({ id, name: p.name })) : [],
+      // пати через Discord: возможен ли режим, включён ли, открыто ли окно пати, слышит ли сайт звонок сейчас
+      discord: { available: !!partyDiscordNow.available, on: !!state.partyDiscord, site: !!partyDiscordNow.site, hearing: !!(state.partyDiscord && partyDiscordNow.site && partyDiscordNow.hearing) },
     },
   };
 }
@@ -553,6 +557,7 @@ async function runHubCommand(name, args) {
   if (name === 'effects.off') return selectVoice('none'), null;
   if (name === 'party.start') {
     if (partyRole) throw new Error('пати уже идёт');
+    if (state.partyDiscord) throw new Error('сначала выключите пати через Discord');
     if (!sys.installed) throw new Error('aura.txt не встроена в микрофон');
     if (!state.party) await setPartyOn(true);
     const res = await startPartyHost();
@@ -567,6 +572,39 @@ async function runHubCommand(name, args) {
   if (name === 'party.answer') {
     if (partyRole !== 'host' || partyPeople.get(args.id)?.state !== 'asking') throw new Error('такого человека нет');
     answerGuest(args.id, !!args.ok);
+    return null;
+  }
+  if (name === 'party.discord') {
+    const on = !!args.on;
+    if (on && !state.party) { // выключенный раздел включается, как в party.start; проверки — те же, что у переключателя
+      if (partyRole) throw new Error('сначала выйдите из пати по коду');
+      if (!partyDiscordNow.available) throw new Error('режим недоступен');
+      await setPartyOn(true);
+    }
+    await setPartyDiscord(on);
+    return null;
+  }
+  if (name === 'party.site') {
+    if (!args.open) {
+      await window.auraSystem.partyClose();
+      renderParty();
+      return null;
+    }
+    const url = typeof args.url === 'string' && args.url.trim() ? args.url.trim() : state.partyUrl;
+    if (!url) throw new Error('адрес сайта не задан');
+    const wasOff = !state.party; // раздел выключен — включается до окна: иначе режим Discord пересоздал бы окно сразу же
+    if (wasOff) await setPartyOn(true);
+    const res = await window.auraSystem.partyOpen(url);
+    if (res.error) {
+      if (wasOff) await setPartyOn(false);
+      throw new Error(res.error.charAt(0).toLowerCase() + res.error.slice(1).replace(/\.$/, '')); // тексты main.js — строчными, без точки
+    }
+    if (url !== state.partyUrl) {
+      state.partyUrl = url;
+      $('#partyUrl').value = url;
+      save();
+    }
+    setTimeout(renderParty, 800);
     return null;
   }
   throw new Error('такой команды нет');
@@ -3045,6 +3083,7 @@ $('#partyName').value = state.partyName || '';
 $('#partyName').addEventListener('change', (e) => { state.partyName = e.target.value.trim().slice(0, 24); save(); });
 // The button and the hub's party.start: { code } or { error }
 async function startPartyHost() {
+  if (state.partyDiscord) return { error: 'сначала выключите пати через Discord' }; // кнопка в это время недоступна
   if (!sys.installed) {
     partyNote('Голоса друзей попадают в микрофон через модуль: встройте его в Настройках.', true);
     return { error: 'aura.txt не встроена в микрофон' };
@@ -3066,6 +3105,7 @@ async function startPartyHost() {
 $('#partyCreate').addEventListener('click', () => startPartyHost());
 $('#partyCopy').addEventListener('click', () => navigator.clipboard.writeText(partyCodeNow).then(() => flash('Код скопирован')));
 $('#partyJoin').addEventListener('click', async () => {
+  if (state.partyDiscord) return; // пати по коду и пати через Discord вместе не идут
   const name = $('#partyName').value.trim() || 'Гость';
   let mic = null;
   try { // echo cancelling on: what you hear from the party must not go back into it through your microphone
@@ -3126,6 +3166,7 @@ window.auraSystem?.onParty?.((name, p) => {
   if (name === 'denied') { partyRtc?.micStream?.getTracks().forEach((t) => t.stop()); partyStop('Хост не впустил.'); }
   if (name === 'capture-ended' && partyAppPid) { partyAppPid = 0; $('#partyApp').value = ''; stopPartyCapture(); partyNote('Программа закрылась — захват остановлен.'); renderParty(); }
   if (name === 'ended' && partyRole === 'guest') { partyRtc?.micStream?.getTracks().forEach((t) => t.stop()); partyStop('Пати закрыта.'); }
+  if (name === 'discord') { partyDiscordNow = { ...partyDiscordNow, ...p }; renderPartyDiscord(); publishHubState(); }
 });
 renderPartyNet();
 
@@ -3141,8 +3182,60 @@ async function setPartyOn(on) {
   if (!state.party) { partyAppPid = 0; await window.auraSystem.partyCaptureStop(); stopPartyCapture(); await window.auraSystem.partyClose(); if (partyRole) await partyStop(); }
   applyPartySwitch();
   pushSystem();
+  await tellPartyDiscord(); // режим Discord работает, только пока раздел включён
   publishHubState();
 }
+
+/* «Пати через Discord»: собеседник на сайте слышит звонок Discord. Звук Discord берёт main.js (свой AuraCapture),
+ * смешивает с микрофоном сама страница окна пати (party-preload.js) — в системный микрофон он не идёт, поэтому
+ * Discord по-прежнему получает только голос, без эха. Модуль в микрофоне для этого не нужен. С пати по коду не совмещается. */
+let partyDiscordNow = { available: false, on: false, site: false, found: false, hearing: false }; // что сообщил main.js
+async function tellPartyDiscord() {
+  const s = await window.auraSystem?.partyDiscordMode?.(!!(state.party && state.partyDiscord));
+  if (s) partyDiscordNow = { ...partyDiscordNow, ...s };
+  renderPartyDiscord();
+}
+function renderPartyDiscord() {
+  const s = partyDiscordNow;
+  const box = $('#partyDiscord');
+  box.checked = !!state.partyDiscord;
+  box.disabled = !s.available && !state.partyDiscord; // включённый можно выключить всегда
+  let text = '';
+  if (!s.available) text = 'Недоступно: нет компонента захвата звука — обновите Aura';
+  else if (state.partyDiscord) text = !s.site ? 'Откройте окно пати' : s.hearing ? 'Сайт слышит звонок' : s.found ? 'Подключаюсь к звуку Discord…' : 'Discord не запущен';
+  const status = $('#partyDiscordStatus');
+  status.textContent = text;
+  status.hidden = !text;
+  status.classList.toggle('ok', !!(state.partyDiscord && s.site && s.hearing));
+  const code = !!state.partyDiscord; // пати по коду в это время недоступна
+  for (const id of ['partyCreate', 'partyJoin', 'partyCode']) $('#' + id).disabled = code;
+  $('#partyCodeOff').hidden = !code;
+}
+// Переключатель и команда хаба party.discord. Ошибки — текстом хаба.
+async function setPartyDiscord(on) {
+  if (on && partyRole) throw new Error('сначала выйдите из пати по коду');
+  if (on && !partyDiscordNow.available) throw new Error('режим недоступен');
+  const wasOpen = partyDiscordNow.site;
+  state.partyDiscord = !!on;
+  save();
+  await tellPartyDiscord();
+  if (wasOpen && !partyAppPid) { // окно пати сделано заново: его звук для индикатора берётся снова
+    stopPartyCapture();
+    renderParty();
+  }
+  publishHubState();
+}
+$('#partyDiscord').addEventListener('change', async (e) => {
+  try {
+    await setPartyDiscord(e.target.checked);
+    partyNote('');
+  } catch (err) {
+    e.target.checked = !!state.partyDiscord;
+    const m = String(err?.message || err);
+    partyNote(m.charAt(0).toUpperCase() + m.slice(1) + '.', true);
+  }
+});
+tellPartyDiscord();
 $('#partyOn').addEventListener('change', (e) => setPartyOn(e.target.checked));
 $('#partyForget').addEventListener('click', async (e) => {
   e.preventDefault();
