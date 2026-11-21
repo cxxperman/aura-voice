@@ -1242,7 +1242,7 @@ function startHub() {
       // core.txt открывает окно; со страницей «keys» — сразу на горячих клавишах
       show: (args) => {
         showWindow();
-        if (args?.page === 'keys') command('page', 'keys');
+        if (args?.page === 'keys' || args?.page === 'party') command('page', args.page);
         return null;
       },
       // «Закрыть» в трее core.txt: пока значок держит core.txt, это выход из aura.txt

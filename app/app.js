@@ -2080,6 +2080,8 @@ function showTab(name) {
 for (const b of tabButtons) b.addEventListener('click', () => showTab(b.dataset.tab));
 // core.txt просит открыть страницу (show с page). Своё место здесь есть только у горячих клавиш — внизу «Настроек».
 function openPage(page) {
+  // «party» — вкладка «Пати» (другое приложение dev.txt отправляет сюда за кабелем); раздел выключен — включаем
+  if (page === 'party') return void (async () => { if (!state.party) await setPartyOn(true); showTab('party'); })();
   if (page !== 'keys') return;
   showTab('setup');
   const title = $('#keysTitle');
@@ -3245,10 +3247,16 @@ function renderPartyDiscord() {
   status.textContent = text;
   status.hidden = !text;
   status.classList.toggle('ok', !!(s.available && partyDiscordHearing()));
-  $('#partyWhereRow').hidden = !on;
+  // Где открыт сайт и что для браузера нужен кабель, видно и до включения режима: иначе о кабеле не узнать
+  const viaCable = state.partyDiscordWhere === 'browser';
+  $('#partyWhereRow').hidden = false;
   for (const b of $('#partyWhere').children) b.setAttribute('aria-checked', String(b.dataset.where === state.partyDiscordWhere));
-  $('#partyCableRow').hidden = !browser;
-  $('#partyCableNeed').hidden = !(browser && s.available && !cable.id && !pick);
+  $('#partyCableRow').hidden = !viaCable;
+  $('#partyCableNeed').hidden = !viaCable;
+  $('#partyCableNote').textContent = cable.id
+    ? 'Для сайта в браузере нужен виртуальный звуковой кабель — у вас он уже есть. Это драйвер стороннего разработчика, например VB-Cable.'
+    : 'Для сайта в браузере нужен виртуальный звуковой кабель, например бесплатный VB-Cable. Это драйвер стороннего разработчика: Aura его не устанавливает. Скачайте и установите его сами — после этого он появится здесь.';
+  $('#partyCableGet').textContent = cable.id ? 'Страница VB-Cable' : 'Скачать VB-Cable';
   const hint = $('#partyCableHint');
   hint.hidden = !(browser && s.available && partyDiscordHearing());
   hint.textContent = `В браузере выберите микрофоном „${cable.mic}“ — только для этого сайта.`;
