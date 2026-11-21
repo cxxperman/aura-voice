@@ -62,7 +62,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: aura-installer
-          path: dist/Aura-Setup-*.exe
+          # The block map goes into the release next to the installer: core.txt uses it to download only what changed.
+          path: |
+            dist/Aura-Setup-*.exe
+            dist/Aura-Setup-*.exe.blockmap
+          if-no-files-found: error
       - name: Show what went into the app
         shell: bash
         run: |
